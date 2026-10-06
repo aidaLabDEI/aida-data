@@ -6,7 +6,7 @@ readme = "README.md"
 authors = [
     { name = "Matteo Ceccarello", email = "matteo.ceccarello@unipd.it" }
 ]
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
     "h5py>=3.16.0",
     "numpy>=2.5.3",
