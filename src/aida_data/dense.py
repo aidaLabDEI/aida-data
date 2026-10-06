@@ -403,12 +403,19 @@ def local_path(name: str):
     return DATASETS_DIR / Path(urlparse(url).path).name
 
 
+@dataclass(frozen=True)
+class Dataset:
+    distance: str
+    dataset: np.ndarray
+    queries: np.ndarray | None = None
+    distances: np.ndarray | None = None
+
+
 def load(
     name: str,
     pipeline: TransformerMixin | None = None,
-    load_queries: bool = False,
     deduplicate: bool = True,
-):
+) -> Dataset:
     """Load dataset `name`, optionally transforming it with `pipeline`.
 
     Processing order:
@@ -435,8 +442,7 @@ def load(
     accepted; the dtype is whatever the pipeline produces (`StandardScaler`,
     `PCA` and `SafeL2Normalizer` preserve float32).
 
-    Returns `(distance, train)`, or `(distance, train, test, distances)` if
-    `load_queries` is True (`test` and `distances` may be None).
+    Returns an instance of Dataset
 
     Example::
 
@@ -447,7 +453,7 @@ def load(
         pipeline = make_pipeline(
             StandardScaler(with_std=False), PCA(64), SafeL2Normalizer()
         )
-        distance, train = load("glove-100-angular", pipeline)
+        ds = load("glove-100-angular", pipeline)
     """
     if name not in available_datasets():
         raise KeyError(
@@ -488,7 +494,7 @@ def load(
         # onto each other), regardless of the return path.
         train = np.unique(train, axis=0)
 
-    if load_queries and test is not None:
+    if test is not None:
         # We return the distances only if the data has not been preprocessed
         # and no rows have been dropped.
         # If that's the case, then the distances are meaningless.
@@ -497,11 +503,11 @@ def load(
             and train.shape[0] == orig_n_train
             and test.shape[0] == orig_n_test
         ):
-            return distance, train, test, distances
+            return Dataset(distance, train, test, distances)
         else:
-            return distance, train, test
+            return Dataset(distance, train, test)
     else:
-        return distance, train
+        return Dataset(distance, train)
 
 
 def _apply_transform(transform: Callable, data: np.ndarray, label: str) -> np.ndarray:

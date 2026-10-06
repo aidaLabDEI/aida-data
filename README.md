@@ -22,7 +22,7 @@ distance, train = load("glove-100-angular")
 # Preprocess with any sklearn transformer/pipeline: it is fitted on the
 # train set and applied to the test set.
 pipeline = make_pipeline(StandardScaler(with_std=False), PCA(64), SafeL2Normalizer())
-distance, train, test, distances = load("glove-100-angular", pipeline, load_queries=True)
+ds = load("glove-100-angular", pipeline, load_queries=True)
 print(pipeline.named_steps["pca"].explained_variance_ratio_)
 ```
 

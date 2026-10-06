@@ -39,42 +39,37 @@ def tiny_datasets(tmp_path, monkeypatch):
 
 
 def test_no_pipeline_returns_untransformed_data():
-    distance, train, test, distances = load("tiny", load_queries=True)
-    assert distance == "euclidean"
-    np.testing.assert_array_equal(train, np.unique(TRAIN, axis=0))
-    np.testing.assert_array_equal(test, TEST)
-    np.testing.assert_array_equal(distances, DISTANCES)
-
-
-def test_return_shape_without_queries():
-    result = load("tiny", StandardScaler())
-    assert len(result) == 2
+    ds = load("tiny")
+    assert ds.distance == "euclidean"
+    np.testing.assert_array_equal(ds.dataset, np.unique(TRAIN, axis=0))
+    np.testing.assert_array_equal(ds.queries, TEST)
+    np.testing.assert_array_equal(ds.distances, DISTANCES)
 
 
 def test_standard_scaler_uses_train_statistics():
     scaler = StandardScaler()
-    _, train, test = load("tiny", scaler, load_queries=True)
-    np.testing.assert_allclose(train.mean(axis=0), 0.0, atol=1e-5)
-    np.testing.assert_allclose(train.std(axis=0), 1.0, atol=1e-4)
+    ds = load("tiny", scaler)
+    np.testing.assert_allclose(ds.dataset.mean(axis=0), 0.0, atol=1e-5)
+    np.testing.assert_allclose(ds.dataset.std(axis=0), 1.0, atol=1e-4)
     expected = (TEST - TRAIN.mean(axis=0)) / TRAIN.std(axis=0)
-    np.testing.assert_allclose(test, expected, rtol=1e-4, atol=1e-4)
+    np.testing.assert_allclose(ds.queries, expected, rtol=1e-4, atol=1e-4)
 
 
 def test_pca_projects_test_with_train_fitted_pca():
     pca = PCA(n_components=3)
-    _, train, test = load("tiny", pca, load_queries=True)
-    assert train.shape[1] == 3
-    assert test.shape[1] == 3
-    np.testing.assert_allclose(test, pca.transform(TEST), rtol=1e-5, atol=1e-5)
+    ds = load("tiny", pca)
+    assert ds.dataset.shape[1] == 3
+    assert ds.queries.shape[1] == 3
+    np.testing.assert_allclose(ds.queries, pca.transform(TEST), rtol=1e-5, atol=1e-5)
 
 
 def test_safe_l2_normalizer_and_zero_rows_removed_for_angular():
-    _, train, test = load("tiny-angular", SafeL2Normalizer(), load_queries=True)
-    np.testing.assert_allclose(np.linalg.norm(train, axis=1), 1.0, rtol=1e-5)
-    np.testing.assert_allclose(np.linalg.norm(test, axis=1), 1.0, rtol=1e-5)
+    ds = load("tiny-angular", SafeL2Normalizer())
+    np.testing.assert_allclose(np.linalg.norm(ds.dataset, axis=1), 1.0, rtol=1e-5)
+    np.testing.assert_allclose(np.linalg.norm(ds.queries, axis=1), 1.0, rtol=1e-5)
     # the three zeroed train rows are removed
-    assert train.shape[0] == TRAIN.shape[0] - 3
-    assert test.shape[0] == TEST.shape[0] - 1
+    assert ds.dataset.shape[0] == TRAIN.shape[0] - 3
+    assert ds.queries.shape[0] == TEST.shape[0] - 1
 
 
 def test_pipeline_is_fitted_in_place():
@@ -100,6 +95,6 @@ def test_row_dropping_transformer_raises():
 def test_pandas_output_is_converted_to_array():
     pipeline = make_pipeline(StandardScaler(), PCA(2)).set_output(transform="pandas")
     assert isinstance(pipeline.fit_transform(TRAIN), pd.DataFrame)
-    _, train, test = load("tiny", pipeline, load_queries=True)
-    assert isinstance(train, np.ndarray)
-    assert isinstance(test, np.ndarray)
+    ds = load("tiny", pipeline)
+    assert isinstance(ds.dataset, np.ndarray)
+    assert isinstance(ds.queries, np.ndarray)
