@@ -1,0 +1,25 @@
+[project]
+name = "aida-data"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Matteo Ceccarello", email = "matteo.ceccarello@unipd.it" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "h5py>=3.16.0",
+    "numpy>=2.5.3",
+    "pandas>=3.0.6",
+    "pyarrow>=25.0.1",
+    "requests>=2.34.2",
+    "scikit-learn>=1.9.1",
+    "tqdm>=4.70.1",
+]
+
+[project.scripts]
+aida-data = "aida_data:main"
+
+[build-system]
+requires = ["uv_build>=0.12.11,<0.13.0"]
+build-backend = "uv_build"
