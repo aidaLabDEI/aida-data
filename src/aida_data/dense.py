@@ -3,13 +3,12 @@ Dense datasets, under different distance measures.
 Datasets are collected from different sources
 """
 
-import argparse
-from dataclasses import dataclass
 import logging
 import os
-from typing import Callable
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 from urllib.parse import urlparse
 
 import h5py
@@ -18,13 +17,15 @@ import pandas as pd
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
-DATASETS_DIR = Path(os.environ.get("PANNA_DATA_DIR", "datasets"))
+DATASETS_DIR = Path(os.environ.get("AIDA_DATA_DIR", "datasets"))
 
 _LOGGER = logging.getLogger("aida_data.dense")
+
 
 def _download(url, destination: Path):
     import requests
     from tqdm import tqdm
+
     if urlparse(url).scheme not in ("http", "https"):
         # Synthetic/local datasets (e.g. densired-hard) use a
         # non-fetchable placeholder URL and are generated on demand by
@@ -35,13 +36,16 @@ def _download(url, destination: Path):
         with requests.get(url, stream=True) as response:
             response.raise_for_status()
             total = int(response.headers.get("Content-Length", 0))
-            with open(destination, "wb") as out_file, tqdm(
-                total=total or None,
-                unit="B",
-                unit_scale=True,
-                unit_divisor=1024,
-                desc=destination.name,
-            ) as progress:
+            with (
+                open(destination, "wb") as out_file,
+                tqdm(
+                    total=total or None,
+                    unit="B",
+                    unit_scale=True,
+                    unit_divisor=1024,
+                    desc=destination.name,
+                ) as progress,
+            ):
                 for chunk in response.iter_content(chunk_size=1024 * 1024):
                     out_file.write(chunk)
                     progress.update(len(chunk))
@@ -84,6 +88,7 @@ def _load_census(path: Path):
     data = raw["X"].astype(np.float32)
     return data, None, None
 
+
 def _load_densired_hard(path: Path):
     """Synthetic densired dataset (https://github.com/PhilJahn/DENSIRED):
     5000 tight, well-separated clusters (core_num=1, radius=0.15) over
@@ -94,10 +99,15 @@ def _load_densired_hard(path: Path):
             from densired import datagen
         except ImportError:
             _LOGGER.error("Install the densired package first!")
-            raise 
+            raise
         skeleton = datagen.densityDataGen(
-            dim=100, clunum=5000, core_num=1, radius=0.15, momentum=0.5,
-            ratio_noise=0.0, seed=1234,
+            dim=100,
+            clunum=5000,
+            core_num=1,
+            radius=0.15,
+            momentum=0.5,
+            ratio_noise=0.0,
+            seed=1234,
         )
         raw = skeleton.generate_data(100_000)
         data = np.unique(raw[:, :-1].astype(np.float32), axis=0)
@@ -107,23 +117,25 @@ def _load_densired_hard(path: Path):
         data = np.load(path)["X"].astype(np.float32)
     return data, None, None
 
+
 def _load_ht(path: Path):
     # Unzip
-    with zipfile.ZipFile(path, 'r') as zip_ref:
+    with zipfile.ZipFile(path, "r") as zip_ref:
         zip_ref.extractall(path.parent)
         # Unzip the inner file "HT_Sensor_dataset.zip"
         inner_zip_path = path.parent / "HT_Sensor_dataset.zip"
         # if there is an inner zip file, extract it
         if inner_zip_path.is_file():
-            with zipfile.ZipFile(inner_zip_path, 'r') as inner_zip_ref:
+            with zipfile.ZipFile(inner_zip_path, "r") as inner_zip_ref:
                 inner_zip_ref.extractall(path.parent)
     # Load data
     data_path = path.parent / "HT_Sensor_dataset.dat"
-    data = pd.read_csv(data_path, sep=r'\s+')
+    data = pd.read_csv(data_path, sep=r"\s+")
     del data["id"]
     data = data.to_numpy().astype(np.float32)
     data = np.nan_to_num(data)
     return data, None, None
+
 
 def _load_fbin(path: Path):
     # `.fbin` layout: uint32 number of vectors, uint32 dimension, then the
@@ -139,126 +151,198 @@ def _load_chem(path: Path):
     # Unzip
     # Catch and handle not finding the file, try with the explicit file name
     try:
-        with zipfile.ZipFile(path, 'r') as zip_ref:
+        with zipfile.ZipFile(path, "r") as zip_ref:
             zip_ref.extractall(path.parent)
         # Load data
-        data_path = path.parent / "gas+sensor+array+under+dynamic+gas+mixtures/ethylene_CO.txt"
-        data = pd.read_csv(data_path, sep=r'\s+').to_numpy().astype(np.float32)
+        data_path = (
+            path.parent / "gas+sensor+array+under+dynamic+gas+mixtures/ethylene_CO.txt"
+        )
+        data = pd.read_csv(data_path, sep=r"\s+").to_numpy().astype(np.float32)
     except Exception:
         data_path = path.parent / "ethylene_CO.txt"
-        data = pd.read_csv(data_path, sep=r'\s+').to_numpy().astype(np.float32)
+        data = pd.read_csv(data_path, sep=r"\s+").to_numpy().astype(np.float32)
     data = np.nan_to_num(data)
     return data, None, None
 
 
-        
-
-_DATASETS_INFO = {
-    "landmark-nomic-768-normalized": (
-        "https://huggingface.co/datasets/vector-index-bench/vibe/resolve/main/landmark-nomic-768-normalized.hdf5?download=true",
-        _load_hdf5,
-        "euclidean",
-    ),
-    "imagenet-clip-512-normalized": (
-        "https://huggingface.co/datasets/vector-index-bench/vibe/resolve/main/imagenet-clip-512-normalized.hdf5?download=true",
-        _load_hdf5,
-        "euclidean",
-    ),
-    "agnews-mxbai-1024-euclidean": (
-        "https://huggingface.co/datasets/vector-index-bench/vibe/resolve/main/agnews-mxbai-1024-euclidean.hdf5",
-        _load_hdf5,
-        "euclidean",
-    ),
-    "celeba-resnet-2048-cosine": (
-        "https://huggingface.co/datasets/vector-index-bench/vibe/resolve/main/celeba-resnet-2048-cosine.hdf5",
-        _load_hdf5,
-        "cosine",
-    ),
-    "simplewiki-openai-3072-normalized": (
-        "https://huggingface.co/datasets/vector-index-bench/vibe/resolve/main/simplewiki-openai-3072-normalized.hdf5?download=true",
-        _load_hdf5,
-        "euclidean",
-    ),
-    "deep-image-96-angular": (
-        "http://ann-benchmarks.com/deep-image-96-angular.hdf5",
-        _load_hdf5,
-        "angular",
-    ),
-    "mnist-784-euclidean": (
-        "http://ann-benchmarks.com/mnist-784-euclidean.hdf5",
-        _load_hdf5,
-        "euclidean",
-    ),
-    "fashion-mnist-784-euclidean": (
-        "http://ann-benchmarks.com/fashion-mnist-784-euclidean.hdf5",
-        _load_hdf5,
-        "euclidean",
-    ),
-    "glove-100-angular": (
-        "http://ann-benchmarks.com/glove-100-angular.hdf5",
-        _load_hdf5,
-        "angular",
-    ),
-    "gist-960-euclidean": (
-        "http://ann-benchmarks.com/gist-960-euclidean.hdf5",
-        _load_hdf5,
-        "euclidean",
-    ),
-    "nytimes-256-angular": (
-        "http://ann-benchmarks.com/nytimes-256-angular.hdf5",
-        _load_hdf5,
-        "angular",
-    ),
-    "sift-128-euclidean": (
-        "http://ann-benchmarks.com/sift-128-euclidean.hdf5",
-        _load_hdf5,
-        "euclidean",
-    ),
-    "pamap2": (
-        "http://archive.ics.uci.edu/ml/machine-learning-databases/00231/PAMAP2_Dataset.zip",
-        _load_pamap,
-        "euclidean",
-    ),
-    "census": (
-        "https://github.com/Minqi824/ADBench/raw/main/adbench/datasets/Classical/9_census.npz",
-        _load_census,
-        "euclidean",
-    ),
-     "ht": (
-         "https://archive.ics.uci.edu/static/public/362/gas+sensors+for+home+activity+monitoring.zip",
-            _load_ht,
-            "euclidean",
-    ),
-     "yandex-t2i": (
-         "https://storage.yandexcloud.net/yandex-research/ann-datasets/T2I/base.1M.fbin",
-         _load_fbin,
-         "euclidean",
-    ),
-     "chem": (
-         "https://archive.ics.uci.edu/static/public/322/gas+sensor+array+under+dynamic+gas+mixtures.zip",
-         _load_chem,
-         "euclidean",
-    ),
-    "densired-hard": (
-        # Not a real download URL: this dataset is synthetic (see
-        # _load_densired_hard).
-        "file:///densired-hard.npz",
-        _load_densired_hard,
-        "euclidean",
-    ),
-}
-
-@dataclass
+@dataclass(frozen=True)
 class DatasetInfo:
     name: str
     url: str
     loader_function: Callable
     distance_type: str
 
-def register(info: DatasetInfo, force = False):
+
+_DATASETS_INFO: dict[str, DatasetInfo] = {}
+
+
+def register(info: DatasetInfo, force=False):
     if info.name in _DATASETS_INFO and not force:
         raise ValueError(f"dataset {info.name} already registered")
     _DATASETS_INFO[info.name] = info
+
+
+register(
+    DatasetInfo(
+        "landmark-nomic-768-normalized",
+        "https://huggingface.co/datasets/vector-index-bench/vibe/resolve/main/landmark-nomic-768-normalized.hdf5?download=true",
+        _load_hdf5,
+        "euclidean",
+    )
+)
+
+register(
+    DatasetInfo(
+        "imagenet-clip-512-normalized",
+        "https://huggingface.co/datasets/vector-index-bench/vibe/resolve/main/imagenet-clip-512-normalized.hdf5?download=true",
+        _load_hdf5,
+        "euclidean",
+    )
+)
+
+register(
+    DatasetInfo(
+        "agnews-mxbai-1024-euclidean",
+        "https://huggingface.co/datasets/vector-index-bench/vibe/resolve/main/agnews-mxbai-1024-euclidean.hdf5",
+        _load_hdf5,
+        "euclidean",
+    )
+)
+
+register(
+    DatasetInfo(
+        "celeba-resnet-2048-cosine",
+        "https://huggingface.co/datasets/vector-index-bench/vibe/resolve/main/celeba-resnet-2048-cosine.hdf5",
+        _load_hdf5,
+        "cosine",
+    )
+)
+
+register(
+    DatasetInfo(
+        "simplewiki-openai-3072-normalized",
+        "https://huggingface.co/datasets/vector-index-bench/vibe/resolve/main/simplewiki-openai-3072-normalized.hdf5?download=true",
+        _load_hdf5,
+        "euclidean",
+    )
+)
+
+register(
+    DatasetInfo(
+        "deep-image-96-angular",
+        "http://ann-benchmarks.com/deep-image-96-angular.hdf5",
+        _load_hdf5,
+        "angular",
+    )
+)
+
+register(
+    DatasetInfo(
+        "mnist-784-euclidean",
+        "http://ann-benchmarks.com/mnist-784-euclidean.hdf5",
+        _load_hdf5,
+        "euclidean",
+    )
+)
+
+register(
+    DatasetInfo(
+        "fashion-mnist-784-euclidean",
+        "http://ann-benchmarks.com/fashion-mnist-784-euclidean.hdf5",
+        _load_hdf5,
+        "euclidean",
+    )
+)
+
+register(
+    DatasetInfo(
+        "glove-100-angular",
+        "http://ann-benchmarks.com/glove-100-angular.hdf5",
+        _load_hdf5,
+        "angular",
+    )
+)
+
+register(
+    DatasetInfo(
+        "gist-960-euclidean",
+        "http://ann-benchmarks.com/gist-960-euclidean.hdf5",
+        _load_hdf5,
+        "euclidean",
+    )
+)
+
+register(
+    DatasetInfo(
+        "nytimes-256-angular",
+        "http://ann-benchmarks.com/nytimes-256-angular.hdf5",
+        _load_hdf5,
+        "angular",
+    )
+)
+
+register(
+    DatasetInfo(
+        "sift-128-euclidean",
+        "http://ann-benchmarks.com/sift-128-euclidean.hdf5",
+        _load_hdf5,
+        "euclidean",
+    )
+)
+
+register(
+    DatasetInfo(
+        "pamap2",
+        "http://archive.ics.uci.edu/ml/machine-learning-databases/00231/PAMAP2_Dataset.zip",
+        _load_pamap,
+        "euclidean",
+    )
+)
+
+register(
+    DatasetInfo(
+        "census",
+        "https://github.com/Minqi824/ADBench/raw/main/adbench/datasets/Classical/9_census.npz",
+        _load_census,
+        "euclidean",
+    )
+)
+
+register(
+    DatasetInfo(
+        "ht",
+        "https://archive.ics.uci.edu/static/public/362/gas+sensors+for+home+activity+monitoring.zip",
+        _load_ht,
+        "euclidean",
+    )
+)
+
+register(
+    DatasetInfo(
+        "yandex-t2i",
+        "https://storage.yandexcloud.net/yandex-research/ann-datasets/T2I/base.1M.fbin",
+        _load_fbin,
+        "euclidean",
+    )
+)
+
+register(
+    DatasetInfo(
+        "chem",
+        "https://archive.ics.uci.edu/static/public/322/gas+sensor+array+under+dynamic+gas+mixtures.zip",
+        _load_chem,
+        "euclidean",
+    )
+)
+
+# Not a real download URL: this dataset is synthetic (see
+# _load_densired_hard).
+register(
+    DatasetInfo(
+        "densired-hard", "file:///densired-hard.npz", _load_densired_hard, "euclidean"
+    )
+)
+
 
 def available_datasets():
     return list(_DATASETS_INFO.keys())
@@ -293,7 +377,7 @@ def _array_health_stats(data: np.ndarray) -> tuple[int, int]:
 
 
 def local_path(name: str):
-    url, _, _ = _DATASETS_INFO[name]
+    url = _DATASETS_INFO[name].url
     return DATASETS_DIR / Path(urlparse(url).path).name
 
 
@@ -312,7 +396,8 @@ def load(
     if not DATASETS_DIR.is_dir():
         DATASETS_DIR.mkdir()
 
-    url, loader, distance = _DATASETS_INFO[name]
+    info = _DATASETS_INFO[name]
+    url, loader, distance = info.url, info.loader_function, info.distance_type
     local_name = local_path(name)
     _download(url, local_name)
     train, test, distances = loader(local_name)
@@ -322,7 +407,7 @@ def load(
     train = train[~np.isnan(train).any(axis=1) & ~np.isinf(train).any(axis=1)]
     if test is not None:
         test = test[~np.isnan(test).any(axis=1) & ~np.isinf(test).any(axis=1)]
-    
+
     if center_mean or standardize:
         scaler = StandardScaler(with_std=standardize)
         train = scaler.fit_transform(train)
@@ -355,59 +440,3 @@ def load(
         return distance, train, test, distances
     else:
         return distance, train
-
-
-if __name__ == "__main__":
-    _LOGGER.setLevel(logging.INFO)
-    parser = argparse.ArgumentParser(
-        description="Load PANNA datasets and print dimensions/health diagnostics."
-    )
-    parser.add_argument(
-        "--normalize",
-        action="store_true",
-        help="Apply safe L2 normalization before reporting stats.",
-    )
-    parser.add_argument(
-        "--center-mean",
-        action="store_true",
-        help="Center features before reporting stats.",
-    )
-    parser.add_argument(
-        "--standardize",
-        action="store_true",
-        help="Standardize features before reporting stats.",
-    )
-    args = parser.parse_args()
-
-    print("name,train_rows,dimension,test_rows,train_zero_norm_rows,train_non_finite,test_zero_norm_rows,test_non_finite")
-    for dataset_name in available_datasets():
-        try:
-            pca_dimensions = 4 if "pamap2" in dataset_name.lower() else None
-            loaded = load(
-                dataset_name,
-                pca_dimensions=pca_dimensions,
-                center_mean=args.center_mean,
-                load_queries=True,
-                normalize=args.normalize,
-                standardize=args.standardize,
-            )
-            if len(loaded) != 4:
-                raise RuntimeError(
-                    f"unexpected loader output arity for {dataset_name}: {len(loaded)}"
-                )
-            _, train, test, _ = loaded
-
-            train_zero, train_non_finite = _array_health_stats(train)
-            if test is not None:
-                test_zero, test_non_finite = _array_health_stats(test)
-                test_rows = test.shape[0]
-            else:
-                test_zero, test_non_finite = 0, 0
-                test_rows = 0
-
-            print(
-                f"{dataset_name},{train.shape[0]},{train.shape[1]},{test_rows},"
-                f"{train_zero},{train_non_finite},{test_zero},{test_non_finite}"
-            )
-        except Exception as exc:
-            print(f"{dataset_name},ERROR,{type(exc).__name__}:{exc}")
