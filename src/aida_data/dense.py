@@ -421,8 +421,8 @@ def load(
     Processing order:
 
     1. the raw data is downloaded (if needed) and loaded;
-    2. if `deduplicate=True` duplicate rows of the train set are dropped.
-       Rows containing
+    2. if `deduplicate=True` duplicate rows of the train set are dropped,
+       keeping the first occurrence and the original row order. Rows containing
        NaN/inf are dropped from both train and test sets;
     3. if `pipeline` is not None, it is fitted on the train set
        (`pipeline.fit_transform(train)`) and then applied to the test set
@@ -468,10 +468,10 @@ def load(
     _download(url, local_name)
     train, test, distances = loader(local_name)
     orig_n_train = train.shape[0]
-    orig_n_test = test.shape[0]
+    orig_n_test = test.shape[0] if test is not None else 0
     if deduplicate:
         # Remove duplicate rows (if any) from train set
-        train = np.unique(train, axis=0)
+        train = _drop_duplicate_rows(train)
     # Remove completely NaN and infinite values from train and test sets, don't substitute with numbers
     train = train[~np.isnan(train).any(axis=1) & ~np.isinf(train).any(axis=1)]
     if test is not None:
@@ -492,7 +492,7 @@ def load(
         # Remove duplicate rows that may have been (re)introduced by the pipeline
         # (e.g. PCA collapsing points, or normalization mapping collinear vectors
         # onto each other), regardless of the return path.
-        train = np.unique(train, axis=0)
+        train = _drop_duplicate_rows(train)
 
     if test is not None:
         # We return the distances only if the data has not been preprocessed
@@ -508,6 +508,12 @@ def load(
             return Dataset(distance, train, test)
     else:
         return Dataset(distance, train)
+
+
+def _drop_duplicate_rows(data: np.ndarray) -> np.ndarray:
+    """Drop duplicate rows, keeping the first occurrence and the original order."""
+    _, first_idx = np.unique(data, axis=0, return_index=True)
+    return data[np.sort(first_idx)]
 
 
 def _apply_transform(transform: Callable, data: np.ndarray, label: str) -> np.ndarray:
