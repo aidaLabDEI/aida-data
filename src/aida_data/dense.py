@@ -14,8 +14,7 @@ from urllib.parse import urlparse
 import h5py
 import numpy as np
 import pandas as pd
-from sklearn.decomposition import PCA
-from sklearn.preprocessing import StandardScaler
+from sklearn.base import BaseEstimator, TransformerMixin
 
 DATASETS_DIR = Path(os.environ.get("AIDA_DATA_DIR", "datasets"))
 
@@ -369,6 +368,29 @@ def _safe_l2_normalize_rows(data: np.ndarray, label: str) -> np.ndarray:
     return out
 
 
+class SafeL2Normalizer(TransformerMixin, BaseEstimator):
+    """Stateless transformer scaling each row to unit L2 norm.
+
+    Unlike `sklearn.preprocessing.Normalizer`, rows with zero or non-finite
+    norm are set to zero (with a logged warning), and any remaining NaN/inf
+    values are replaced by zero. The output is always float32.
+
+    `label` is only used in the warning message.
+    """
+
+    def __init__(self, label: str = "data"):
+        self.label = label
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        return _safe_l2_normalize_rows(np.asarray(X), self.label)
+
+    def __sklearn_is_fitted__(self):
+        return True
+
+
 def _array_health_stats(data: np.ndarray) -> tuple[int, int]:
     norms = np.linalg.norm(data, axis=1)
     zero_norm_rows = int(np.count_nonzero(norms <= 0.0))
@@ -383,12 +405,50 @@ def local_path(name: str):
 
 def load(
     name: str,
-    pca_dimensions=None,
-    center_mean=False,
-    load_queries=False,
-    normalize=False,
-    standardize=False,
+    pipeline: TransformerMixin | None = None,
+    load_queries: bool = False,
+    deduplicate: bool = True,
 ):
+    """Load dataset `name`, optionally transforming it with `pipeline`.
+
+    Processing order:
+
+    1. the raw data is downloaded (if needed) and loaded;
+    2. if `deduplicate=True` duplicate rows of the train set are dropped.
+       Rows containing
+       NaN/inf are dropped from both train and test sets;
+    3. if `pipeline` is not None, it is fitted on the train set
+       (`pipeline.fit_transform(train)`) and then applied to the test set
+       (`pipeline.transform(test)`);
+    4. for `angular`/`cosine`/`normalized` distances all-zero rows are
+       dropped from train and test, and duplicate rows of train (possibly
+       introduced by the pipeline) are dropped again.
+
+    `pipeline` can be any object exposing `fit_transform`/`transform`,
+    typically an `sklearn.pipeline.Pipeline` or a single transformer. It is
+    fitted *in place*: after `load` returns its fitted state can be
+    inspected or reused to transform new points. Pass
+    `sklearn.base.clone(pipeline)` to keep the original object untouched.
+    The pipeline must not change the number of rows, otherwise a
+    `ValueError` is raised. Its output is converted with `np.asarray`, so
+    pipelines configured with `set_output(transform="pandas")` are
+    accepted; the dtype is whatever the pipeline produces (`StandardScaler`,
+    `PCA` and `SafeL2Normalizer` preserve float32).
+
+    Returns `(distance, train)`, or `(distance, train, test, distances)` if
+    `load_queries` is True (`test` and `distances` may be None).
+
+    Example::
+
+        from sklearn.decomposition import PCA
+        from sklearn.pipeline import make_pipeline
+        from sklearn.preprocessing import StandardScaler
+
+        pipeline = make_pipeline(
+            StandardScaler(with_std=False), PCA(64), SafeL2Normalizer()
+        )
+        distance, train = load("glove-100-angular", pipeline)
+    """
     if name not in available_datasets():
         raise KeyError(
             f"Dataset `{name}` not available. Pick one of {available_datasets()}"
@@ -401,24 +461,20 @@ def load(
     local_name = local_path(name)
     _download(url, local_name)
     train, test, distances = loader(local_name)
-    # Remove duplicate rows (if any) from train set
-    train = np.unique(train, axis=0)
+    orig_n_train = train.shape[0]
+    orig_n_test = test.shape[0]
+    if deduplicate:
+        # Remove duplicate rows (if any) from train set
+        train = np.unique(train, axis=0)
     # Remove completely NaN and infinite values from train and test sets, don't substitute with numbers
     train = train[~np.isnan(train).any(axis=1) & ~np.isinf(train).any(axis=1)]
     if test is not None:
         test = test[~np.isnan(test).any(axis=1) & ~np.isinf(test).any(axis=1)]
 
-    if center_mean or standardize:
-        scaler = StandardScaler(with_std=standardize)
-        train = scaler.fit_transform(train)
+    if pipeline is not None:
+        train = _apply_transform(pipeline.fit_transform, train, "train")
         if test is not None:
-            test = scaler.transform(test)
-
-    if pca_dimensions is not None:
-        pca = PCA(n_components=pca_dimensions)
-        train = pca.fit_transform(train)
-        if test is not None:
-            test = pca.fit_transform(test)
+            test = _apply_transform(pipeline.transform, test, "test")
 
     if distance in ("angular", "cosine", "normalized"):
         # remove 0-rows
@@ -426,17 +482,33 @@ def load(
         if test is not None:
             test = test[~((test == 0).all(axis=1))]
 
-    if normalize:
-        train = _safe_l2_normalize_rows(train, "train")
-        if test is not None:
-            test = _safe_l2_normalize_rows(test, "test")
+    if deduplicate:
+        # Remove duplicate rows that may have been (re)introduced by the pipeline
+        # (e.g. PCA collapsing points, or normalization mapping collinear vectors
+        # onto each other), regardless of the return path.
+        train = np.unique(train, axis=0)
 
-    # Remove duplicate rows that may have been (re)introduced by the transforms
-    # above (e.g. PCA collapsing points, or normalization mapping collinear
-    # vectors onto each other), regardless of the return path.
-    train = np.unique(train, axis=0)
-
-    if load_queries:
-        return distance, train, test, distances
+    if load_queries and test is not None:
+        # We return the distances only if the data has not been preprocessed
+        # and no rows have been dropped.
+        # If that's the case, then the distances are meaningless.
+        if (
+            pipeline is None
+            and train.shape[0] == orig_n_train
+            and test.shape[0] == orig_n_test
+        ):
+            return distance, train, test, distances
+        else:
+            return distance, train, test
     else:
         return distance, train
+
+
+def _apply_transform(transform: Callable, data: np.ndarray, label: str) -> np.ndarray:
+    out = np.asarray(transform(data))
+    if out.shape[0] != data.shape[0]:
+        raise ValueError(
+            f"pipeline changed the number of {label} rows "
+            f"({data.shape[0]} -> {out.shape[0]}); transformers must not drop rows"
+        )
+    return out
