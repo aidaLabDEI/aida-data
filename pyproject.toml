@@ -1,7 +1,7 @@
 [project]
 name = "aida-data"
 version = "0.1.0"
-description = "Add your description here"
+description = "Tools manage and preprocess datasets"
 readme = "README.md"
 authors = [
     { name = "Matteo Ceccarello", email = "matteo.ceccarello@unipd.it" }
@@ -28,3 +28,7 @@ build-backend = "uv_build"
 dev = [
     "pytest>=9.1.1",
 ]
+
+[tool.pytest.ini_options]
+markers = ["network: tests that download datasets (deselected by default, run with `-m network`)"]
+addopts = "-m 'not network'"
