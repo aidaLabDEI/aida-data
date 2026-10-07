@@ -41,7 +41,7 @@ def tiny_datasets(tmp_path, monkeypatch):
 def test_no_pipeline_returns_untransformed_data():
     ds = load("tiny")
     assert ds.distance == "euclidean"
-    np.testing.assert_array_equal(ds.dataset, np.unique(TRAIN, axis=0))
+    np.testing.assert_array_equal(ds.dataset, TRAIN)
     np.testing.assert_array_equal(ds.queries, TEST)
     np.testing.assert_array_equal(ds.distances, DISTANCES)
 
