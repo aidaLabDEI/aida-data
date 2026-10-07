@@ -27,3 +27,25 @@ print(pipeline.named_steps["pca"].explained_variance_ratio_)
 ```
 
 </details>
+
+<details>
+<summary>Graph datasets with colored nodes.</summary>
+
+Graphs from [Sirius](https://github.com/leonardopellegrina/Sirius/tree/main/data),
+loaded as undirected simple graphs (self loops and duplicate edges dropped,
+each edge stored once as `(u, v)` with `u < v`).
+
+```python
+from aida_data import graph
+
+print(graph.available_datasets())
+g = graph.load_edge_list("brexit")
+g.edges   # (m, 2) int64 array
+g.colors  # (n,) int64 array, g.colors[v] is the color of node v (-1 if missing)
+g.n_nodes, g.n_edges, g.n_colors
+
+# Keep edge orientation, and remap colors to 0..k-1
+g = graph.load_edge_list("brexit", directed=True, remap_colors=True)
+```
+
+</details>
