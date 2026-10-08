@@ -17,7 +17,7 @@ from sklearn.preprocessing import StandardScaler
 from aida_data.dense import SafeL2Normalizer, load
 
 # Raw (cleaned) data
-distance, train = load("glove-100-angular")
+ds = load("glove-100-angular")
 
 # Preprocess with any sklearn transformer/pipeline: it is fitted on the
 # train set and applied to the test set.
