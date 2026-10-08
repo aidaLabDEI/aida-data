@@ -87,4 +87,12 @@ g.n_nodes, g.n_edges, g.n_colors
 g = graph.load_edge_list("brexit", directed=True, remap_colors=True)
 ```
 
+Each graph is parsed once into `datasets/graphs/<name>.parquet` (or under
+`$AIDA_DATA_DIR`), a zstd-compressed adjacency list with one row per node
+(`nbrs`: sorted out-neighbors, `color`), roughly a tenth of the size of the
+TSV files. The TSV files are then deleted; set `AIDA_DATA_KEEP_RAW=1` to keep
+them, or call `graph.prune_raw(dry_run=False)` to remove the ones left over
+from earlier versions (`graph.prune_raw()` is a dry run). The options of
+`load_edge_list` are applied when reading the cache.
+
 </details>

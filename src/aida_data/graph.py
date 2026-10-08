@@ -1,5 +1,5 @@
 """\
-Graph datasets with colored nodes, stored as edge lists.
+Graph datasets with colored nodes, returned as edge lists.
 
 Datasets come from the Sirius repository
 (https://github.com/leonardopellegrina/Sirius/tree/main/data): each dataset
@@ -9,8 +9,13 @@ colors (`node<TAB>color`).
 By default graphs are treated as undirected and simple: self loops and
 duplicate edges are dropped, and each undirected edge is stored once as
 `(u, v)` with `u < v`.
+
+Each dataset is parsed once into a zstd-compressed parquet cache holding an
+adjacency list (see `_write_parquet_cache`); the raw TSV files are then
+deleted unless `KEEP_RAW` is set.
 """
 
+import json
 import logging
 import os
 from dataclasses import dataclass
@@ -20,12 +25,18 @@ from urllib.parse import urlparse
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from ._download import download as _download
+from .dense import KEEP_RAW
 
 DATASETS_DIR = Path(os.environ.get("AIDA_DATA_DIR", "datasets"))
 
 _LOGGER = logging.getLogger("aida_data.graph")
+
+# Layout version of the parquet caches written by `_cached`.
+_CACHE_VERSION = 1
 
 
 def _read_int_pairs(path: Path) -> np.ndarray:
@@ -101,6 +112,13 @@ def local_paths(name: str) -> tuple[Path, Path]:
     )
 
 
+def cache_path(name: str) -> Path:
+    """The parquet cache of dataset `name`."""
+    if name not in _DATASETS_INFO:
+        raise KeyError(f"Dataset `{name}` not available")
+    return DATASETS_DIR / "graphs" / f"{name}.parquet"
+
+
 @dataclass(frozen=True)
 class EdgeList:
     name: str
@@ -128,7 +146,8 @@ def load_edge_list(
 
     Processing:
 
-    1. the raw files are downloaded (if needed) and loaded;
+    1. the raw files are downloaded (if needed) and loaded, once: the result
+       is kept in a parquet cache (see `_cached`);
     2. `colors[v]` is the color of node `v`, for `v` in `0..n-1`, where `n` is
        one plus the largest node id in the edges or in the labels. Nodes
        without a color get `-1` (and a warning is logged). If
@@ -149,22 +168,16 @@ def load_edge_list(
             f"Dataset `{name}` not available. Pick one of {available_datasets()}"
         )
 
-    info = _DATASETS_INFO[name]
-    edges_path, colors_path = local_paths(name)
-    edges_path.parent.mkdir(parents=True, exist_ok=True)
-    _download(info.edges_url, edges_path)
-    _download(info.colors_url, colors_path)
-    edges, node_colors = info.loader_function(edges_path, colors_path)
-    edges = np.asarray(edges, dtype=np.int64).reshape(-1, 2)
-    node_colors = np.asarray(node_colors, dtype=np.int64).reshape(-1, 2)
-
-    colors = _build_colors(name, edges, node_colors, remap_colors)
-    edges = _normalize_edges(name, edges, directed)
+    edges, colors = _cached(name)
+    if not directed:
+        edges = _to_undirected(name, edges)
+    if remap_colors:
+        colors = _remap_colors(colors)
     return EdgeList(name, edges, colors, directed)
 
 
 def _build_colors(
-    name: str, edges: np.ndarray, node_colors: np.ndarray, remap_colors: bool
+    name: str, edges: np.ndarray, node_colors: np.ndarray
 ) -> np.ndarray:
     ids, labels = node_colors[:, 0], node_colors[:, 1]
     if len(np.unique(ids)) != len(ids):
@@ -176,20 +189,36 @@ def _build_colors(
     n_missing = int(np.count_nonzero(~colored))
     if n_missing > 0:
         _LOGGER.warning("%s: %d nodes have no color", name, n_missing)
-    if remap_colors:
-        _, inv = np.unique(colors[colored], return_inverse=True)
-        colors[colored] = inv
     return colors
 
 
-def _normalize_edges(name: str, edges: np.ndarray, directed: bool) -> np.ndarray:
+def _remap_colors(colors: np.ndarray) -> np.ndarray:
+    """Replace colors by their rank among the distinct colors, keeping `-1`."""
+    colors = colors.copy()
+    colored = colors >= 0
+    _, inv = np.unique(colors[colored], return_inverse=True)
+    colors[colored] = inv
+    return colors
+
+
+def _to_undirected(name: str, edges: np.ndarray) -> np.ndarray:
+    """Orient each edge as `(min(u, v), max(u, v))` and drop the duplicates."""
+    n_before = len(edges)
+    edges = _unique_rows(np.sort(edges, axis=1))
+    n_dups = n_before - len(edges)
+    if n_dups > 0:
+        _LOGGER.info("%s: dropped %d duplicate edges", name, n_dups)
+    return edges
+
+
+def _clean_edges(name: str, edges: np.ndarray) -> np.ndarray:
+    """Drop self loops and duplicate rows, keeping the orientation of the
+    edges; rows are sorted lexicographically."""
     loops = edges[:, 0] == edges[:, 1]
     n_loops = int(np.count_nonzero(loops))
     if n_loops > 0:
         _LOGGER.info("%s: dropped %d self loops", name, n_loops)
         edges = edges[~loops]
-    if not directed:
-        edges = np.sort(edges, axis=1)
     n_before = len(edges)
     edges = _unique_rows(edges)
     n_dups = n_before - len(edges)
@@ -208,3 +237,135 @@ def _unique_rows(edges: np.ndarray) -> np.ndarray:
     # whose order matches the lexicographic order of the rows.
     keys = np.unique(edges[:, 0] * n + edges[:, 1])
     return np.stack([keys // n, keys % n], axis=1)
+
+
+def _index_dtype(n: int) -> np.dtype:
+    """Integer type for node ids `0..n-1`: int32 unless `n` is too large."""
+    return np.dtype(np.int32 if n <= 2**31 - 1 else np.int64)
+
+
+def _color_dtype(colors: np.ndarray) -> np.dtype:
+    """Narrowest signed integer type holding `colors` (which may hold `-1`)."""
+    for dtype in (np.int8, np.int16, np.int32, np.int64):
+        info = np.iinfo(dtype)
+        if colors.min(initial=0) >= info.min and colors.max(initial=0) <= info.max:
+            return np.dtype(dtype)
+    raise AssertionError("unreachable: colors are int64")
+
+
+def _write_parquet_cache(path: Path, edges: np.ndarray, colors: np.ndarray):
+    """Write the graph to the parquet cache `path`.
+
+    `edges` is an (m, 2) array of unique, non-loop edges sorted
+    lexicographically, whose ids are below `len(colors)`. One row per node
+    `v = 0..n-1`: `nbrs` is the list of out-neighbors of `v` in the
+    orientation of the source, sorted ascending (an adjacency list, stored
+    as parquet values plus offsets), and `color` is the color of `v`.
+    """
+    n = len(colors)
+    counts = np.bincount(edges[:, 0], minlength=n)
+    offsets = np.zeros(n + 1, dtype=np.int32)
+    np.cumsum(counts, out=offsets[1:])
+    nbrs = pa.ListArray.from_arrays(
+        pa.array(offsets), pa.array(edges[:, 1].astype(_index_dtype(n)))
+    )
+    meta = {"version": _CACHE_VERSION, "n_nodes": n, "n_edges": len(edges)}
+    table = pa.table(
+        {"nbrs": nbrs, "color": colors.astype(_color_dtype(colors))}
+    ).replace_schema_metadata({b"aida_data": json.dumps(meta).encode()})
+    tmp_path = path.with_suffix(".parquet.tmp")
+    # Almost all neighbor ids are distinct, so dictionary encoding does not
+    # help for them; deltas of sorted ids are small instead.
+    pq.write_table(
+        table,
+        tmp_path,
+        compression="zstd",
+        compression_level=3,
+        use_dictionary=["color"],
+        column_encoding={"nbrs.list.element": "DELTA_BINARY_PACKED"},
+    )
+    # Rename only once the file is complete, so that an interrupted write
+    # does not leave a truncated cache behind.
+    tmp_path.replace(path)
+
+
+def _read_parquet_cache(path: Path) -> tuple[np.ndarray, np.ndarray]:
+    """Read a cache written by `_write_parquet_cache` as `(edges, colors)`,
+    an (m, 2) and an (n,) int64 array."""
+    table = pq.read_table(path)
+    meta = json.loads((table.schema.metadata or {}).get(b"aida_data", b"null"))
+    if not isinstance(meta, dict) or meta.get("version") != _CACHE_VERSION:
+        raise ValueError(
+            f"{path} is not a cache in a known format, delete it to parse the "
+            "dataset again"
+        )
+    nbrs = table.column("nbrs").combine_chunks()
+    colors = table.column("color").to_numpy().astype(np.int64)
+    edges = np.empty((len(nbrs.flatten()), 2), dtype=np.int64)
+    edges[:, 0] = np.repeat(np.arange(len(nbrs), dtype=np.int64), np.diff(nbrs.offsets))
+    edges[:, 1] = nbrs.flatten().to_numpy()
+    return edges, colors
+
+
+def _cached(name: str) -> tuple[np.ndarray, np.ndarray]:
+    """Return `(edges, colors)` of dataset `name`, parsing it only once.
+
+    The first call downloads the raw files, parses them with the loader of the
+    dataset and stores the result in `cache_path(name)`; later calls only read
+    that file. The cache does not depend on the options of `load_edge_list`:
+    it holds the edges with self loops and duplicates removed, in the source
+    orientation, and the colors as in the labels file (`-1` if missing).
+
+    After a fresh parse the raw files are deleted, unless `KEEP_RAW` is set.
+    """
+    cache = cache_path(name)
+    if not cache.is_file():
+        info = _DATASETS_INFO[name]
+        edges_path, colors_path = local_paths(name)
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        _download(info.edges_url, edges_path)
+        _download(info.colors_url, colors_path)
+        _LOGGER.info("parsing %s into %s", edges_path, cache)
+        edges, node_colors = info.loader_function(edges_path, colors_path)
+        edges = np.asarray(edges, dtype=np.int64).reshape(-1, 2)
+        node_colors = np.asarray(node_colors, dtype=np.int64).reshape(-1, 2)
+        colors = _build_colors(name, edges, node_colors)
+        _write_parquet_cache(cache, _clean_edges(name, edges), colors)
+        # Only after a fresh parse: upgrading alone never removes files.
+        if not KEEP_RAW:
+            _delete_raw(edges_path, colors_path)
+    # Always read back from the file, so that the first and later calls
+    # return identical arrays.
+    return _read_parquet_cache(cache)
+
+
+def _delete_raw(*paths: Path):
+    for path in paths:
+        if path.is_file():
+            size = path.stat().st_size
+            path.unlink()
+            _LOGGER.info("deleted %s (%.1f MiB)", path, size / 2**20)
+
+
+def prune_raw(dry_run: bool = True) -> list[Path]:
+    """Raw downloads of datasets whose cache exists, which are no longer
+    needed. With `dry_run=False` they are deleted.
+    """
+    paths = [
+        path
+        for name in _DATASETS_INFO
+        if cache_path(name).is_file()
+        for path in local_paths(name)
+        if path.is_file()
+    ]
+    total = sum(path.stat().st_size for path in paths)
+    _LOGGER.info(
+        "%s %d raw files (%.1f MiB): %s",
+        "would delete" if dry_run else "deleting",
+        len(paths),
+        total / 2**20,
+        ", ".join(str(path) for path in paths),
+    )
+    if not dry_run:
+        _delete_raw(*paths)
+    return paths
