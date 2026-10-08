@@ -15,10 +15,16 @@ dependencies = [
     "requests>=2.34.2",
     "scikit-learn>=1.9.1",
     "tqdm>=4.70.1",
+    "xlrd>=2.0.2",
 ]
 
 [project.scripts]
 aida-data = "aida_data:main"
+
+[project.optional-dependencies]
+shuttle = [
+    "unlzw3>=0.2.3",
+]
 
 [build-system]
 requires = ["uv_build>=0.12.11,<0.13.0"]
@@ -27,6 +33,7 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "unlzw3>=0.2.3",
 ]
 
 [tool.pytest.ini_options]

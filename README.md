@@ -29,6 +29,32 @@ print(pipeline.named_steps["pca"].explained_variance_ratio_)
 </details>
 
 <details>
+<summary>Dense datasets with colors.</summary>
+
+Several dense datasets (fair-clustering, streaming-fair and silhouette
+datasets: `adult`, `athlete`, `diabetes`, `creditcard`, `census1990`,
+`4area`, `reuter_50_50`, `victorian`, `bank`, `covertype`, `phones`, `higgs`,
+`higgs-highlevel`, `breast`, `wine`, `shuttle`, `rt-iot2022`, `biokdd`) come
+with categorical attributes, returned as `Dataset.colors` and kept aligned
+with the rows through deduplication, NaN filtering and the pipeline. Rows
+are duplicates only if both features and colors are equal.
+
+```python
+from aida_data import dense
+
+ds = dense.load("adult")
+ds.dataset            # (n, 5) float32
+ds.colors.names       # ("sex", "race", "marital-status")
+sex = ds.colors.column("sex")  # (n,) int64 codes
+ds.colors.labels[0]   # ("Female", "Male"), so labels[0][code] decodes sex
+ds.colors.n_colors("race")
+```
+
+`shuttle` needs the optional `unlzw3` package (`pip install aida-data[shuttle]`).
+
+</details>
+
+<details>
 <summary>Graph datasets with colored nodes.</summary>
 
 Graphs from [Sirius](https://github.com/leonardopellegrina/Sirius/tree/main/data),
