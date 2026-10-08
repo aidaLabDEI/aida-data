@@ -295,11 +295,8 @@ To decide while implementing, recording the answer here:
   implemented: it is spectrogram band energies (nperseg 8, 32 bands between 1
   and 20 Hz) of an IU.ANMO trace read from a local `quake.mseed` that is in no
   repository, so a rebuilt series could not be compared with the paper's file.
-- **Shared downloader (not changed).** `_download.download` has no timeout and
-  writes straight to the destination, so an interrupted or stalled download
-  leaves a truncated file that the next call mistakes for a complete one (it
-  skips files that exist). Seen with the throttled FL010 download. It would be
-  worth writing to `*.part` and renaming, and passing a timeout to `requests`.
+- **Shared downloader (fixed).** Interrupted or stalled downloads used to leave
+  truncated files; see `2026-10-08-fix-downloader.md`.
 
 ## 9. Summary
 

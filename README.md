@@ -29,7 +29,9 @@ print(pipeline.named_steps["pca"].explained_variance_ratio_)
 Datasets are downloaded to `datasets/` (or `$AIDA_DATA_DIR`). Large datasets
 are parsed once into a zstd-compressed `<name>.parquet` cache next to the
 download. The raw download is then deleted, since it is not needed anymore;
-set `AIDA_DATA_KEEP_RAW=1` to keep it. Raw files left over from earlier
+set `AIDA_DATA_KEEP_RAW=1` to keep it. Downloads are written to
+`<name>.part` and renamed once complete; a leftover `.part` file is safe to
+delete. Raw files left over from earlier
 versions can be removed with `prune_raw`:
 
 ```python
