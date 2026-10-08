@@ -1,5 +1,6 @@
 import dataclasses
 import gzip
+import sys
 
 import numpy as np
 import pyarrow.parquet as pq
@@ -90,6 +91,7 @@ def test_phase_1_and_2_datasets_are_registered():
         "evaporator",
         "ruth",
         "oikolab-weather",
+        "fl010",
     } <= set(timeseries.available_datasets())
 
 
@@ -198,6 +200,32 @@ def test_load_tsf_rejects_unequal_lengths_and_data_before_tag(tmp_path):
     path.write_text("@attribute a string\nT1:a:1,2\n")
     with pytest.raises(ValueError, match="before the @data tag"):
         timeseries._load_tsf(path)
+
+
+def test_load_wfdb_reads_a_record(tmp_path):
+    wfdb = pytest.importorskip("wfdb")
+    signal = np.column_stack([np.linspace(-1, 1, 50), np.sin(np.arange(50) / 5)])
+    wfdb.wrsamp(
+        "rec",
+        fs=100,
+        units=["g", "g"],
+        sig_name=["acc", "gyro"],
+        p_signal=signal,
+        fmt=["16", "16"],
+        write_dir=str(tmp_path),
+    )
+    values, dim_names, time = timeseries._load_wfdb(
+        tmp_path / "rec.hea", tmp_path / "rec.dat"
+    )
+    assert values.shape == (50, 2) and values.dtype == np.float64
+    np.testing.assert_allclose(values, signal, atol=1e-3)
+    assert list(dim_names) == ["acc", "gyro"] and time is None
+
+
+def test_load_wfdb_without_wfdb_explains_how_to_install(tmp_path, monkeypatch):
+    monkeypatch.setitem(sys.modules, "wfdb", None)  # import raises ImportError
+    with pytest.raises(ImportError, match=r"aida-data\[wfdb\]"):
+        timeseries._load_wfdb(tmp_path / "rec.hea", tmp_path / "rec.dat")
 
 
 def test_load_csv_keeps_column_names_order_and_nans(tmp_path):
@@ -453,6 +481,7 @@ def test_prune_raw():
         ("evaporator", 6305, 6),
         ("ruth", 14859, 32),
         ("oikolab-weather", 100057, 8),
+        ("fl010", 25132289, 6),
     ],
 )
 def test_real_sources(monkeypatch, name, n, d):
@@ -470,6 +499,9 @@ def test_real_sources(monkeypatch, name, n, d):
             "water level",
             "steam flow",
         )
+    if name == "fl010":
+        assert ts.dim_names[0] == "v-acceleration"
+        assert not any(path.exists() for path in timeseries.local_paths(name))
     if name == "oikolab-weather":
         assert ts.dim_names[:2] == ("temperature", "dewpoint_temperature")
         assert ts.time[0] == np.datetime64("2010-01-01T00:00")

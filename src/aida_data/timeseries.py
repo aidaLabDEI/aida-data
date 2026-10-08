@@ -67,6 +67,23 @@ def _load_csv(path: Path) -> Parsed:
     return df.to_numpy(), list(df.columns), None
 
 
+def _load_wfdb(header: Path, data: Path) -> Parsed:
+    """A WFDB record (PhysioNet): the `.hea` header and the signal file next
+    to it, which the header refers to by name. Needs the optional `wfdb`
+    package. Values are in physical units and keep the NaN of missing
+    samples; the dimensions are named after the signals."""
+    try:
+        import wfdb
+    except ImportError:
+        raise ImportError(
+            f"Reading {header.name} needs the optional wfdb package: "
+            "pip install aida-data[wfdb]"
+        ) from None
+    # `data` is only listed so that it is downloaded: wfdb finds it by itself.
+    values, fields = wfdb.rdsamp(str(header.with_suffix("")))
+    return values, fields["sig_name"], None
+
+
 # Length of a time step for the `@frequency` values of .tsf files that have a
 # fixed one.
 _TSF_STEPS = {
@@ -267,6 +284,22 @@ for _info in (
     ),
 ):
     register(_info)
+
+# Long Term Movement Monitoring Database (PhysioNet): three days of a 75 year
+# old man's accelerations and angular velocities, from a belt-worn sensor.
+# The files are served from the PhysioNet bucket of the AWS open data program,
+# as physionet.org itself may be throttled to a few tens of KB/s.
+_LTMM = "https://physionet-open.s3.amazonaws.com/ltmm/1.0.0/"
+register(
+    DatasetInfo(
+        "fl010",
+        (_LTMM + "FL010.hea", _LTMM + "FL010.dat"),
+        _load_wfdb,
+        filename=("FL010.hea", "FL010.dat"),
+        license="Open Data Commons Attribution License v1.0",
+        sampling="100 Hz",
+    )
+)
 
 # Hourly weather near Monash University, from 2010-01-01; provided by Oikolab
 # and published in the Monash Time Series Forecasting Repository
