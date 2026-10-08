@@ -89,6 +89,7 @@ def test_phase_1_and_2_datasets_are_registered():
         "foetal-ecg",
         "evaporator",
         "ruth",
+        "oikolab-weather",
     } <= set(timeseries.available_datasets())
 
 
@@ -140,6 +141,63 @@ def test_load_matrix_whitespace_separated_keeps_every_row(tmp_path):
     np.testing.assert_array_equal(values, [[1.0, -2.5], [3.0, 4.0]])
     path.write_text("7 8 9\n")
     assert timeseries._load_matrix(path)[0].shape == (1, 3)
+
+
+TSF = """\
+# a comment
+@relation Tiny
+@attribute series_name string
+@attribute start_timestamp date
+@attribute type string
+@frequency hourly
+@missing true
+@equallength true
+@data
+T1:2010-01-01 00-00-00:temperature:1.5,?,3,4
+T2:2010-01-01 00-00-00:pressure:10,20,30,40.25
+"""
+
+
+def test_load_tsf_one_dimension_per_series(tmp_path):
+    path = tmp_path / "s.tsf"
+    path.write_text(TSF)
+    values, dim_names, time = timeseries._load_tsf(path)
+    assert dim_names == ["temperature", "pressure"]
+    np.testing.assert_array_equal(
+        values, [[1.5, 10], [np.nan, 20], [3, 30], [4, 40.25]]
+    )
+    assert values.dtype == np.float64
+    np.testing.assert_array_equal(
+        time,
+        np.array(
+            [
+                "2010-01-01T00:00",
+                "2010-01-01T01:00",
+                "2010-01-01T02:00",
+                "2010-01-01T03:00",
+            ],
+            dtype="datetime64[ms]",
+        ),
+    )
+
+
+def test_load_tsf_falls_back_to_series_names_and_skips_time(tmp_path):
+    path = tmp_path / "s.tsf"
+    text = TSF.replace("type", "kind").replace("hourly", "monthly")
+    path.write_text(text.replace("temperature", "same").replace("pressure", "same"))
+    _, dim_names, time = timeseries._load_tsf(path)
+    assert dim_names == ["T1", "T2"]
+    assert time is None
+
+
+def test_load_tsf_rejects_unequal_lengths_and_data_before_tag(tmp_path):
+    path = tmp_path / "s.tsf"
+    path.write_text(TSF.replace("10,20,30,40.25", "10,20"))
+    with pytest.raises(ValueError, match="different lengths"):
+        timeseries._load_tsf(path)
+    path.write_text("@attribute a string\nT1:a:1,2\n")
+    with pytest.raises(ValueError, match="before the @data tag"):
+        timeseries._load_tsf(path)
 
 
 def test_load_csv_keeps_column_names_order_and_nans(tmp_path):
@@ -394,6 +452,7 @@ def test_prune_raw():
         ("foetal-ecg", 2500, 8),
         ("evaporator", 6305, 6),
         ("ruth", 14859, 32),
+        ("oikolab-weather", 100057, 8),
     ],
 )
 def test_real_sources(monkeypatch, name, n, d):
@@ -411,5 +470,9 @@ def test_real_sources(monkeypatch, name, n, d):
             "water level",
             "steam flow",
         )
+    if name == "oikolab-weather":
+        assert ts.dim_names[:2] == ("temperature", "dewpoint_temperature")
+        assert ts.time[0] == np.datetime64("2010-01-01T00:00")
+        assert (np.diff(ts.time) == np.timedelta64(1, "h")).all()
     # a second call reads the cache and returns the same values
     np.testing.assert_array_equal(load(name).values, ts.values)

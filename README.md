@@ -106,7 +106,7 @@ CC BY 4.0) and the four-dimensional `steamgen`
 ([Zenodo 4273921](https://zenodo.org/records/4273921), CC BY 4.0). From the
 Motiflets repository: `dishwasher`, `npo141` (sleep EEG) and `arrhythmia`. From
 the MOMENTI repository: `foetal-ecg` (8 dimensions), `evaporator` (6) and
-`ruth` (32). The files of the last two groups come from GitHub at a pinned
+`ruth` (32), and `oikolab-weather` (8 hourly weather series, with `ts.time`). The files of the last two groups come from GitHub at a pinned
 commit and have their own origin and terms, see the comments in
 `timeseries.py`.
 

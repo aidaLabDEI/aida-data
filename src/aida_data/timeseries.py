@@ -67,6 +67,78 @@ def _load_csv(path: Path) -> Parsed:
     return df.to_numpy(), list(df.columns), None
 
 
+# Length of a time step for the `@frequency` values of .tsf files that have a
+# fixed one.
+_TSF_STEPS = {
+    "minutely": np.timedelta64(1, "m"),
+    "half_hourly": np.timedelta64(30, "m"),
+    "hourly": np.timedelta64(1, "h"),
+    "daily": np.timedelta64(1, "D"),
+    "weekly": np.timedelta64(1, "W"),
+}
+
+
+def _load_tsf(path: Path) -> Parsed:
+    """A multivariate series from a Monash `.tsf` file in which every series
+    is one dimension: all series must have the same length and, to get time
+    stamps, the same `start_timestamp` and a fixed `@frequency`.
+
+    The `@attribute` lines name the fields before the values of each series;
+    `?` marks a missing value, which becomes NaN. The dimensions are named
+    after the `type` attribute if it is there and distinct, else after
+    `series_name`.
+    """
+    attributes: list[str] = []
+    frequency = None
+    in_data = False
+    rows = []
+    with open(path, encoding="latin-1") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("@"):
+                key, _, rest = line.partition(" ")
+                if key == "@attribute":
+                    attributes.append(rest.split()[0])
+                elif key == "@frequency":
+                    frequency = rest.strip()
+                elif key == "@data":
+                    in_data = True
+                continue
+            if not in_data:
+                raise ValueError(f"{path}: series before the @data tag")
+            fields, _, raw = line.rpartition(":")
+            fields = fields.split(":")
+            if len(fields) != len(attributes):
+                raise ValueError(f"{path}: expected {len(attributes)} attributes")
+            series = np.array(raw.replace("?", "nan").split(","), dtype=np.float64)
+            rows.append((dict(zip(attributes, fields)), series))
+    if not rows:
+        raise ValueError(f"{path}: no series")
+    if len({len(series) for _, series in rows}) != 1:
+        raise ValueError(f"{path}: series of different lengths are not supported")
+    values = np.stack([series for _, series in rows], axis=1)
+
+    dim_names = None
+    for attribute in ("type", "series_name"):
+        names = [fields.get(attribute) for fields, _ in rows]
+        if None not in names and len(set(names)) == len(names):
+            dim_names = names
+            break
+
+    time = None
+    starts = {fields.get("start_timestamp") for fields, _ in rows}
+    if len(starts) == 1 and None not in starts and frequency in _TSF_STEPS:
+        # "2010-01-01 00-00-00" -> "2010-01-01T00:00:00"
+        day, _, clock = starts.pop().partition(" ")
+        start = np.datetime64(f"{day}T{clock.replace('-', ':')}", "ms")
+        time = start + np.arange(len(values)) * _TSF_STEPS[frequency].astype(
+            "timedelta64[ms]"
+        )
+    return values, dim_names, time
+
+
 @dataclass(frozen=True)
 class DatasetInfo:
     name: str
@@ -195,6 +267,21 @@ for _info in (
     ),
 ):
     register(_info)
+
+# Hourly weather near Monash University, from 2010-01-01; provided by Oikolab
+# and published in the Monash Time Series Forecasting Repository
+# (https://zenodo.org/records/5184708). MOMENTI smooths it with a Savitzky-Golay
+# filter and replaces missing values by 0; none is done here (it has none).
+register(
+    DatasetInfo(
+        "oikolab-weather",
+        _MOMENTI + "oikolab_weather_dataset.tsf",
+        _load_tsf,
+        filename="oikolab-weather.tsf",
+        license=_CC_BY_4,
+        sampling="hourly",
+    )
+)
 
 
 def available_datasets():
