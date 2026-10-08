@@ -96,3 +96,37 @@ from earlier versions (`graph.prune_raw()` is a dry run). The options of
 `load_edge_list` are applied when reading the cache.
 
 </details>
+
+<details>
+<summary>Time series for motif discovery.</summary>
+
+Series used by ATTIMO and MOMENTI: `astro`, `ecg`, `freezer`, `gap`, `humany`
+(from the [ATTIMO figshare article](https://figshare.com/articles/dataset/Datasets/20747617),
+CC BY 4.0) and the four-dimensional `steamgen`
+([Zenodo 4273921](https://zenodo.org/records/4273921), CC BY 4.0).
+
+```python
+from aida_data import timeseries
+
+print(timeseries.available_datasets())
+ts = timeseries.load("ecg")
+ts.values      # (n, d) float64, one row per time step, in the order of the source
+ts.univariate  # (n,) view, only for series with d == 1
+ts.dim_names   # ("drum pressure", ...) for steamgen, None if the source has no names
+ts.time        # (n,) datetime64[ms], None if the source has no time stamps
+```
+
+`values` is always two-dimensional, so univariate and multivariate series share
+one type; transpose it if your library expects `(d, n)`. Rows are never
+reordered, deduplicated or normalized, and missing values stay NaN. The one
+exception is `ecg`, whose file has 46991 blank lines between runs of values:
+they are skipped, as `pyattimo.load_dataset("ecg")` does.
+
+Each series is parsed once into `datasets/timeseries/<name>.parquet` (or under
+`$AIDA_DATA_DIR`), a zstd-compressed float64 file, about the size of the
+gzipped text and roughly ten times faster to read than to parse. The raw files
+are then deleted; set `AIDA_DATA_KEEP_RAW=1` to keep them, or call
+`timeseries.prune_raw(dry_run=False)` to remove the ones left over
+(`timeseries.prune_raw()` is a dry run).
+
+</details>
