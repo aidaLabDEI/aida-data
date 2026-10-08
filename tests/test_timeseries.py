@@ -75,10 +75,21 @@ def test_unknown_dataset_raises():
         timeseries.cache_path("does-not-exist")
 
 
-def test_phase_1_datasets_are_registered():
-    assert {"astro", "ecg", "freezer", "gap", "humany", "steamgen"} <= set(
-        timeseries.available_datasets()
-    )
+def test_phase_1_and_2_datasets_are_registered():
+    assert {
+        "astro",
+        "ecg",
+        "freezer",
+        "gap",
+        "humany",
+        "steamgen",
+        "dishwasher",
+        "npo141",
+        "arrhythmia",
+        "foetal-ecg",
+        "evaporator",
+        "ruth",
+    } <= set(timeseries.available_datasets())
 
 
 def test_register_rejects_duplicates_and_mismatched_filenames():
@@ -93,22 +104,42 @@ def test_register_rejects_duplicates_and_mismatched_filenames():
 # --- parsers
 
 
-def test_load_values_gz_one_value_per_line_with_nan_and_blank_lines(tmp_path):
+def test_load_matrix_one_value_per_line_with_nan_and_blank_lines(tmp_path):
     path = tmp_path / "s.txt.gz"
     # CRLF line endings and blank lines (skipped, as pyattimo does) as in ECG
     with gzip.open(path, "wt", newline="") as f:
         f.write("1.5\r\n-2e-3\r\n\r\n\r\nnan\r\n4\r\n")
-    values, dim_names, time = timeseries._load_values_gz(path)
+    values, dim_names, time = timeseries._load_matrix(path)
     assert values.shape == (4, 1) and values.dtype == np.float64
     np.testing.assert_array_equal(values[:, 0], [1.5, -0.002, np.nan, 4.0])
     assert dim_names is None and time is None
 
 
-def test_load_values_gz_plain_text_without_trailing_newline(tmp_path):
+def test_load_matrix_plain_text_without_trailing_newline(tmp_path):
     path = tmp_path / "s.csv"
     path.write_text("1\n2\n3")
-    values, _, _ = timeseries._load_values_gz(path)
+    values, _, _ = timeseries._load_matrix(path)
     np.testing.assert_array_equal(values, [[1.0], [2.0], [3.0]])
+
+
+def test_load_matrix_options(tmp_path):
+    path = tmp_path / "s.dat"
+    path.write_text("t,a,b\n0.0,1,2\n0.5,3,4\n")
+    values, dim_names, time = timeseries._load_matrix(
+        path, delimiter=",", skiprows=1, drop_first_columns=1
+    )
+    np.testing.assert_array_equal(values, [[1.0, 2.0], [3.0, 4.0]])
+    assert dim_names is None and time is None
+
+
+def test_load_matrix_whitespace_separated_keeps_every_row(tmp_path):
+    # No header: the first row is data. One row and one column stay 2-D.
+    path = tmp_path / "s.dat"
+    path.write_text("  1.0e+00\t -2.5e+00 \n 3.0e+00\t 4.0e+00\n")
+    values, _, _ = timeseries._load_matrix(path)
+    np.testing.assert_array_equal(values, [[1.0, -2.5], [3.0, 4.0]])
+    path.write_text("7 8 9\n")
+    assert timeseries._load_matrix(path)[0].shape == (1, 3)
 
 
 def test_load_csv_keeps_column_names_order_and_nans(tmp_path):
@@ -357,9 +388,15 @@ def test_prune_raw():
         ("gap", 2049280, 1),
         ("humany", 26415045, 1),
         ("steamgen", 9600, 4),
+        ("dishwasher", 245152, 1),
+        ("npo141", 269287, 1),
+        ("arrhythmia", 650000, 1),
+        ("foetal-ecg", 2500, 8),
+        ("evaporator", 6305, 6),
+        ("ruth", 14859, 32),
     ],
 )
-def test_phase_1_sources(monkeypatch, name, n, d):
+def test_real_sources(monkeypatch, name, n, d):
     from aida_data._download import download
 
     monkeypatch.setattr(timeseries, "_download", download)

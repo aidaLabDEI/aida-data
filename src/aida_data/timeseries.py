@@ -16,6 +16,7 @@ import logging
 import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -40,13 +41,24 @@ Parsed = tuple[np.ndarray, Sequence[str] | None, np.ndarray | None]
 Cached = tuple[np.ndarray, tuple[str, ...] | None, np.ndarray | None]
 
 
-def _load_values_gz(path: Path) -> Parsed:
-    """A univariate series, one value per line, possibly gzipped.
+def _load_matrix(
+    path: Path,
+    delimiter: str | None = None,
+    skiprows: int = 0,
+    drop_first_columns: int = 0,
+) -> Parsed:
+    """A series as a text table without header, possibly gzipped: one row per
+    time step, fields separated by `delimiter` (any whitespace by default).
+    A table with one value per line gives a univariate series.
 
-    Blank lines are skipped, as `pyattimo.load_dataset` does: the ECG file
-    has 46991 of them, between runs of values.
+    Blank lines are skipped, as `pyattimo.load_dataset` does: the ECG file has
+    46991 of them, between runs of values. `drop_first_columns` drops leading
+    columns that are not data, like a time index.
     """
-    return np.loadtxt(path, dtype=np.float64).reshape(-1, 1), None, None
+    values = np.loadtxt(
+        path, dtype=np.float64, delimiter=delimiter, skiprows=skiprows, ndmin=2
+    )
+    return values[:, drop_first_columns:], None, None
 
 
 def _load_csv(path: Path) -> Parsed:
@@ -107,7 +119,7 @@ for _name, _file_id in (
         DatasetInfo(
             _name,
             f"{_FIGSHARE}{_file_id}",
-            _load_values_gz,
+            _load_matrix,
             filename=f"{_name}.txt.gz",
             license=_CC_BY_4,
         )
@@ -123,6 +135,66 @@ register(
         license=_CC_BY_4,
     )
 )
+
+
+# Files of the Motiflets repository (GPL-3.0), pinned to a commit of its
+# `pyattimo` branch. The repository does not state a licence for the data.
+_MOTIFLETS = (
+    "https://raw.githubusercontent.com/patrickzib/motiflets/"
+    "8afb3f9d00f2782c77f1e256ff73c3e7ebbae1d5/datasets/"
+)
+
+for _name, _path, _loader in (
+    # Power draw of a dishwasher.
+    ("dishwasher", "original/dishwasher.txt", _load_matrix),
+    # Sleep EEG of a nap at 100 Hz (PhysioNet).
+    ("npo141", "original/npo141.csv", _load_matrix),
+    # Channel 0 of subject 231 of an ECG arrhythmia database; the file has a
+    # `"Channel 0"` header line.
+    (
+        "arrhythmia",
+        "experiments/arrhythmia_subject231_channel0.csv",
+        partial(_load_matrix, skiprows=1),
+    ),
+):
+    register(DatasetInfo(_name, _MOTIFLETS + _path, _loader, filename=f"{_name}.txt"))
+
+# Files of the MOMENTI repository (AGPL-3.0), pinned to a commit. The data
+# files have their own origin. MOMENTI's own loaders read them with
+# `pd.read_csv`, which takes the first row of these headerless files for a
+# header, and drop the first column; neither is done here.
+_MOMENTI = (
+    "https://raw.githubusercontent.com/aidaLabDEI/MOMENTI-motifs/"
+    "baa24820c0aa2aedd13fa15ac2ee54ecc8dd7694/Datasets/"
+)
+
+for _info in (
+    # Eight potentials recorded on a pregnant woman (DaISy, KU Leuven); the
+    # first column is the time in seconds, every 4 ms.
+    DatasetInfo(
+        "foetal-ecg",
+        _MOMENTI + "FOETAL_ECG.dat",
+        partial(_load_matrix, drop_first_columns=1),
+        filename="foetal-ecg.dat",
+        sampling="250 Hz",
+    ),
+    # Six standardized channels of an industrial evaporator (DaISy, KU
+    # Leuven); there is no index column.
+    DatasetInfo(
+        "evaporator",
+        _MOMENTI + "evaporator.dat",
+        _load_matrix,
+        filename="evaporator.dat",
+    ),
+    # 32 channels with no header. The origin is not documented in the repository.
+    DatasetInfo(
+        "ruth",
+        _MOMENTI + "RUTH.csv",
+        partial(_load_matrix, delimiter=","),
+        filename="ruth.csv",
+    ),
+):
+    register(_info)
 
 
 def available_datasets():

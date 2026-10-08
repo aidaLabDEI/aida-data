@@ -103,7 +103,12 @@ from earlier versions (`graph.prune_raw()` is a dry run). The options of
 Series used by ATTIMO and MOMENTI: `astro`, `ecg`, `freezer`, `gap`, `humany`
 (from the [ATTIMO figshare article](https://figshare.com/articles/dataset/Datasets/20747617),
 CC BY 4.0) and the four-dimensional `steamgen`
-([Zenodo 4273921](https://zenodo.org/records/4273921), CC BY 4.0).
+([Zenodo 4273921](https://zenodo.org/records/4273921), CC BY 4.0). From the
+Motiflets repository: `dishwasher`, `npo141` (sleep EEG) and `arrhythmia`. From
+the MOMENTI repository: `foetal-ecg` (8 dimensions), `evaporator` (6) and
+`ruth` (32). The files of the last two groups come from GitHub at a pinned
+commit and have their own origin and terms, see the comments in
+`timeseries.py`.
 
 ```python
 from aida_data import timeseries
