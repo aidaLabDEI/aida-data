@@ -15,7 +15,6 @@ adjacency list (see `_write_parquet_cache`); the raw TSV files are then
 deleted unless `KEEP_RAW` is set.
 """
 
-import json
 import logging
 import os
 from dataclasses import dataclass
@@ -26,10 +25,9 @@ from urllib.parse import urlparse
 import numpy as np
 import pandas as pd
 import pyarrow as pa
-import pyarrow.parquet as pq
 
+from ._cache import KEEP_RAW, delete_raw, read_table, write_table
 from ._download import download as _download
-from .dense import KEEP_RAW
 
 DATASETS_DIR = Path(os.environ.get("AIDA_DATA_DIR", "datasets"))
 
@@ -270,35 +268,22 @@ def _write_parquet_cache(path: Path, edges: np.ndarray, colors: np.ndarray):
         pa.array(offsets), pa.array(edges[:, 1].astype(_index_dtype(n)))
     )
     meta = {"version": _CACHE_VERSION, "n_nodes": n, "n_edges": len(edges)}
-    table = pa.table(
-        {"nbrs": nbrs, "color": colors.astype(_color_dtype(colors))}
-    ).replace_schema_metadata({b"aida_data": json.dumps(meta).encode()})
-    tmp_path = path.with_suffix(".parquet.tmp")
+    table = pa.table({"nbrs": nbrs, "color": colors.astype(_color_dtype(colors))})
     # Almost all neighbor ids are distinct, so dictionary encoding does not
     # help for them; deltas of sorted ids are small instead.
-    pq.write_table(
+    write_table(
+        path,
         table,
-        tmp_path,
-        compression="zstd",
-        compression_level=3,
+        meta,
         use_dictionary=["color"],
         column_encoding={"nbrs.list.element": "DELTA_BINARY_PACKED"},
     )
-    # Rename only once the file is complete, so that an interrupted write
-    # does not leave a truncated cache behind.
-    tmp_path.replace(path)
 
 
 def _read_parquet_cache(path: Path) -> tuple[np.ndarray, np.ndarray]:
     """Read a cache written by `_write_parquet_cache` as `(edges, colors)`,
     an (m, 2) and an (n,) int64 array."""
-    table = pq.read_table(path)
-    meta = json.loads((table.schema.metadata or {}).get(b"aida_data", b"null"))
-    if not isinstance(meta, dict) or meta.get("version") != _CACHE_VERSION:
-        raise ValueError(
-            f"{path} is not a cache in a known format, delete it to parse the "
-            "dataset again"
-        )
+    table, _ = read_table(path, _CACHE_VERSION)
     nbrs = table.column("nbrs").combine_chunks()
     colors = table.column("color").to_numpy().astype(np.int64)
     edges = np.empty((len(nbrs.flatten()), 2), dtype=np.int64)
@@ -333,18 +318,10 @@ def _cached(name: str) -> tuple[np.ndarray, np.ndarray]:
         _write_parquet_cache(cache, _clean_edges(name, edges), colors)
         # Only after a fresh parse: upgrading alone never removes files.
         if not KEEP_RAW:
-            _delete_raw(edges_path, colors_path)
+            delete_raw(edges_path, colors_path)
     # Always read back from the file, so that the first and later calls
     # return identical arrays.
     return _read_parquet_cache(cache)
-
-
-def _delete_raw(*paths: Path):
-    for path in paths:
-        if path.is_file():
-            size = path.stat().st_size
-            path.unlink()
-            _LOGGER.info("deleted %s (%.1f MiB)", path, size / 2**20)
 
 
 def prune_raw(dry_run: bool = True) -> list[Path]:
@@ -367,5 +344,5 @@ def prune_raw(dry_run: bool = True) -> list[Path]:
         ", ".join(str(path) for path in paths),
     )
     if not dry_run:
-        _delete_raw(*paths)
+        delete_raw(*paths)
     return paths

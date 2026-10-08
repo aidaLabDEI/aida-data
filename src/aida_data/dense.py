@@ -25,14 +25,12 @@ import h5py
 import numpy as np
 import pandas as pd
 import pyarrow as pa
-import pyarrow.parquet as pq
 from sklearn.base import BaseEstimator, TransformerMixin
 
+from ._cache import KEEP_RAW, delete_raw, read_table, write_table
 from ._download import download as _download
 
 DATASETS_DIR = Path(os.environ.get("AIDA_DATA_DIR", "datasets"))
-# Keep the raw download of a cached dataset after parsing it (see `_cached`).
-KEEP_RAW = os.environ.get("AIDA_DATA_KEEP_RAW", "0") == "1"
 
 _LOGGER = logging.getLogger("aida_data.dense")
 
@@ -109,25 +107,12 @@ def _write_parquet_cache(path: Path, data: np.ndarray, colors: Colors | None):
         columns |= {f"color{j}": codes[:, j] for j in range(codes.shape[1])}
         meta["color_names"] = list(colors.names)
         meta["color_labels"] = [list(labels) for labels in colors.labels]
-    table = pa.table(columns).replace_schema_metadata(
-        {b"aida_data": json.dumps(meta).encode()}
-    )
-    tmp_path = path.with_suffix(".parquet.tmp")
-    pq.write_table(table, tmp_path, compression="zstd", compression_level=3)
-    # Rename only once the file is complete, so that an interrupted write
-    # does not leave a truncated cache behind.
-    tmp_path.replace(path)
+    write_table(path, pa.table(columns), meta)
 
 
 def _read_parquet_cache(path: Path) -> tuple[np.ndarray, Colors | None]:
     """Read a cache written by `_write_parquet_cache`."""
-    table = pq.read_table(path)
-    meta = json.loads((table.schema.metadata or {}).get(b"aida_data", b"null"))
-    if not isinstance(meta, dict) or meta.get("version") != _CACHE_VERSION:
-        raise ValueError(
-            f"{path} is not a cache in a known format, delete it to parse the "
-            "dataset again"
-        )
+    table, meta = read_table(path, _CACHE_VERSION)
     # Fill preallocated arrays one column at a time, rather than with
     # `np.column_stack`, so that only one column is duplicated at a time.
     data = np.empty((table.num_rows, meta["n_features"]), dtype=np.float32)
@@ -193,9 +178,7 @@ def _cached(
             # today) is no longer needed by any of them; one needed by
             # another cache or loader is kept.
             if not KEEP_RAW and path.is_file() and not _raw_is_shared(path, cache_name):
-                size = path.stat().st_size
-                path.unlink()
-                _LOGGER.info("deleted %s (%.1f MiB)", path, size / 2**20)
+                delete_raw(path)
     # Always read back from the file, so that the first and later calls
     # return identical arrays.
     return _read_parquet_cache(cache)
@@ -1243,8 +1226,7 @@ def prune_raw(dry_run: bool = True) -> list[Path]:
         ", ".join(str(path) for path in paths),
     )
     if not dry_run:
-        for path in paths:
-            path.unlink()
+        delete_raw(*paths)
     return paths
 
 
