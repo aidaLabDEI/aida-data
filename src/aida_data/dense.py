@@ -31,6 +31,8 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from ._download import download as _download
 
 DATASETS_DIR = Path(os.environ.get("AIDA_DATA_DIR", "datasets"))
+# Keep the raw download of a cached dataset after parsing it (see `_cached`).
+KEEP_RAW = os.environ.get("AIDA_DATA_KEEP_RAW", "0") == "1"
 
 _LOGGER = logging.getLogger("aida_data.dense")
 
@@ -171,6 +173,9 @@ def _cached(
     one column per feature and per color (see `_write_parquet_cache`). It is
     keyed by dataset name rather than by the name of the raw file, because
     several datasets may share one download.
+
+    After a fresh parse the raw file `path` is deleted, unless `KEEP_RAW`
+    is set or another registered dataset with a different cache needs it.
     """
     cache = path.parent / f"{cache_name}.parquet"
     if not cache.is_file():
@@ -183,9 +188,29 @@ def _cached(
         else:
             _LOGGER.info("parsing %s into %s", path, cache)
             _write_parquet_cache(cache, *build(path))
+            # Only after a fresh parse: upgrading alone never removes files.
+            # A raw file shared by datasets with the same cache (only HIGGS
+            # today) is no longer needed by any of them; one needed by
+            # another cache or loader is kept.
+            if not KEEP_RAW and path.is_file() and not _raw_is_shared(path, cache_name):
+                size = path.stat().st_size
+                path.unlink()
+                _LOGGER.info("deleted %s (%.1f MiB)", path, size / 2**20)
     # Always read back from the file, so that the first and later calls
     # return identical arrays.
     return _read_parquet_cache(cache)
+
+
+# Names of the caches written by `_cached`, shared by the loaders and the
+# registrations (`DatasetInfo.cache_name`).
+_PAMAP_CACHE = "pamap"
+_BIOKDD_CACHE = "biokdd"
+_METROPT3_CACHE = "metropt3"
+_HOUSEHOLD_POWER_CACHE = "household-power"
+_COVERTYPE_CACHE = "covertype"
+_CENSUS1990_CACHE = "census1990"
+_PHONES_CACHE = "phones"
+_HIGGS_CACHE = "higgs"
 
 
 def _split_table(
@@ -227,7 +252,7 @@ def _load_pamap(path: Path):
             X = np.nan_to_num(np.array(arr))  # many NaNs in data, replace them with 0.
             return X.astype(np.float32), None
 
-    data, _ = _cached(path, "pamap", load_zipfile)
+    data, _ = _cached(path, _PAMAP_CACHE, load_zipfile)
     return data, None, None
 
 
@@ -510,7 +535,7 @@ def _load_biokdd(path: Path):
         df = df.rename(columns={2: "label"})
         return _split_table(df, list(range(3, 77)), ["label"])
 
-    data, colors = _cached(path, "biokdd", build)
+    data, colors = _cached(path, _BIOKDD_CACHE, build)
     return data, None, None, colors
 
 
@@ -527,7 +552,7 @@ def _load_metropt3(path: Path):
         df = df.drop(columns="timestamp").iloc[:, :-8]
         return df.to_numpy(dtype=np.float32), None
 
-    data, _ = _cached(path, "metropt3", build)
+    data, _ = _cached(path, _METROPT3_CACHE, build)
     return data, None, None
 
 
@@ -547,7 +572,7 @@ def _load_household_power(path: Path):
             df = pd.read_csv(fp, sep=";", na_values="?", engine="pyarrow")
         return df.drop(columns=["Date", "Time"]).to_numpy(dtype=np.float32), None
 
-    data, _ = _cached(path, "household-power", build)
+    data, _ = _cached(path, _HOUSEHOLD_POWER_CACHE, build)
     return data, None, None
 
 
@@ -568,7 +593,7 @@ def _load_covertype(path: Path):
         df = df.rename(columns={54: "cover_type"})
         return _split_table(df, list(range(54)), ["cover_type"])
 
-    data, colors = _cached(path, "covertype", build)
+    data, colors = _cached(path, _COVERTYPE_CACHE, build)
     return data, None, None, colors
 
 
@@ -659,7 +684,7 @@ def _load_census1990(path: Path):
             df = pd.read_csv(fp, engine="pyarrow")
         return _split_table(df, _CENSUS1990_FEATURES, ["dAge", "iSex"])
 
-    data, colors = _cached(path, "census1990", build)
+    data, colors = _cached(path, _CENSUS1990_CACHE, build)
     return data, None, None, colors
 
 
@@ -691,7 +716,7 @@ def _load_phones(path: Path):
                 )
         return _split_table(df, ["x", "y", "z"], _PHONES_COLORS)
 
-    data, colors = _cached(path, "phones", build)
+    data, colors = _cached(path, _PHONES_CACHE, build)
     return data, None, None, colors
 
 
@@ -729,7 +754,7 @@ def _load_higgs(path: Path):
     Features: all 28 attributes (21 low level, 7 high level). Colors:
     `label` (1 for signal, 0 for background).
     """
-    data, colors = _cached(path, "higgs", _build_higgs)
+    data, colors = _cached(path, _HIGGS_CACHE, _build_higgs)
     return data, None, None, colors
 
 
@@ -738,7 +763,7 @@ def _load_higgs_highlevel(path: Path):
     used by streaming-fair and MACACO. Shares download and cache with
     `higgs`. Colors: `label`.
     """
-    data, colors = _cached(path, "higgs", _build_higgs)
+    data, colors = _cached(path, _HIGGS_CACHE, _build_higgs)
     return np.ascontiguousarray(data[:, -7:]), None, None, colors
 
 
@@ -748,6 +773,9 @@ class DatasetInfo:
     url: str
     loader_function: Callable
     distance_type: str
+    # Name passed to `_cached` by the loader, for datasets parsed once and
+    # cached; None for the others.
+    cache_name: str | None = None
 
 
 _DATASETS_INFO: dict[str, DatasetInfo] = {}
@@ -873,6 +901,7 @@ register(
         "http://archive.ics.uci.edu/ml/machine-learning-databases/00231/PAMAP2_Dataset.zip",
         _load_pamap,
         "euclidean",
+        _PAMAP_CACHE,
     )
 )
 
@@ -1022,6 +1051,7 @@ register(
         "https://kdd.org/cupfiles/KDDCupData/2004/data_kddcup04.tar.gz",
         _load_biokdd,
         "euclidean",
+        _BIOKDD_CACHE,
     )
 )
 
@@ -1031,6 +1061,7 @@ register(
         "https://archive.ics.uci.edu/static/public/791/metropt+3+dataset.zip",
         _load_metropt3,
         "euclidean",
+        _METROPT3_CACHE,
     )
 )
 
@@ -1040,6 +1071,7 @@ register(
         "https://archive.ics.uci.edu/static/public/235/individual+household+electric+power+consumption.zip",
         _load_household_power,
         "euclidean",
+        _HOUSEHOLD_POWER_CACHE,
     )
 )
 
@@ -1049,6 +1081,7 @@ register(
         "https://archive.ics.uci.edu/static/public/31/covertype.zip",
         _load_covertype,
         "euclidean",
+        _COVERTYPE_CACHE,
     )
 )
 
@@ -1058,6 +1091,7 @@ register(
         "https://archive.ics.uci.edu/static/public/116/us+census+data+1990.zip",
         _load_census1990,
         "euclidean",
+        _CENSUS1990_CACHE,
     )
 )
 
@@ -1067,6 +1101,7 @@ register(
         "https://archive.ics.uci.edu/static/public/344/heterogeneity+activity+recognition.zip",
         _load_phones,
         "euclidean",
+        _PHONES_CACHE,
     )
 )
 
@@ -1076,6 +1111,7 @@ register(
         "https://archive.ics.uci.edu/ml/machine-learning-databases/00280/HIGGS.csv.gz",
         _load_higgs,
         "euclidean",
+        _HIGGS_CACHE,
     )
 )
 
@@ -1085,6 +1121,7 @@ register(
         "https://archive.ics.uci.edu/ml/machine-learning-databases/00280/HIGGS.csv.gz",
         _load_higgs_highlevel,
         "euclidean",
+        _HIGGS_CACHE,
     )
 )
 
@@ -1152,9 +1189,63 @@ def _array_health_stats(data: np.ndarray) -> tuple[int, int]:
     return zero_norm_rows, non_finite_values
 
 
+def _raw_name(info: DatasetInfo) -> str:
+    return Path(urlparse(info.url).path).name
+
+
 def local_path(name: str):
-    url = _DATASETS_INFO[name].url
-    return DATASETS_DIR / Path(urlparse(url).path).name
+    return DATASETS_DIR / _raw_name(_DATASETS_INFO[name])
+
+
+def _cache_exists(name: str) -> bool:
+    """Whether dataset `name` is cached (parquet, or legacy HDF5 that
+    `_cached` will convert), so that its raw file is not needed."""
+    cache_name = _DATASETS_INFO[name].cache_name
+    if cache_name is None:
+        return False
+    return any(
+        (DATASETS_DIR / f"{cache_name}{suffix}").is_file()
+        for suffix in (".parquet", ".hdf5")
+    )
+
+
+def _raw_is_shared(path: Path, cache_name: str | None) -> bool:
+    """Whether a registered dataset with a cache other than `cache_name`, or
+    with no cache, downloads to the same file name as `path`."""
+    return any(
+        _raw_name(info) == path.name and info.cache_name != cache_name
+        for info in _DATASETS_INFO.values()
+    )
+
+
+def prune_raw(dry_run: bool = True) -> list[Path]:
+    """Raw downloads of cached datasets that are no longer needed, because
+    their cache exists and no other dataset uses them. With
+    `dry_run=False` they are deleted.
+    """
+    paths = []
+    for name, info in _DATASETS_INFO.items():
+        path = local_path(name)
+        if (
+            info.cache_name is not None
+            and _cache_exists(name)
+            and path.is_file()
+            and path not in paths
+            and not _raw_is_shared(path, info.cache_name)
+        ):
+            paths.append(path)
+    total = sum(path.stat().st_size for path in paths)
+    _LOGGER.info(
+        "%s %d raw files (%.1f MiB): %s",
+        "would delete" if dry_run else "deleting",
+        len(paths),
+        total / 2**20,
+        ", ".join(str(path) for path in paths),
+    )
+    if not dry_run:
+        for path in paths:
+            path.unlink()
+    return paths
 
 
 @dataclass(frozen=True)
@@ -1226,7 +1317,10 @@ def load(
     info = _DATASETS_INFO[name]
     url, loader, distance = info.url, info.loader_function, info.distance_type
     local_name = local_path(name)
-    _download(url, local_name)
+    # A cached dataset does not need its raw file, which may have been
+    # deleted (see `_cached` and `prune_raw`).
+    if not _cache_exists(name):
+        _download(url, local_name)
     train, test, distances, *rest = loader(local_name)
     colors: Colors | None = rest[0] if rest else None
     if colors is not None and colors.values.shape[0] != train.shape[0]:
