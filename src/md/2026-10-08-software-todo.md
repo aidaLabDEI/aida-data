@@ -18,7 +18,10 @@ Currently covered by `aida_data`:
 - `aida_data.graph`: the 12 Sirius colored graphs (`abortion`, `brexit`,
   `citeseer`, `com-dblp`, `com-youtube`, `combined`, `obamacare`,
   `phy_citations`, `trivago-clicks`, `twitter_pol`, `uselections`,
-  `walmart-trips`).
+  `walmart-trips`);
+- `aida_data.timeseries`: `astro`, `ecg`, `freezer`, `gap`, `humany`,
+  `steamgen`, `dishwasher`, `npo141`, `arrhythmia`, `foetal-ecg`,
+  `evaporator`, `ruth`, `oikolab-weather`, `fl010`.
 
 ## 1. Coverage by repository
 
@@ -26,8 +29,8 @@ Currently covered by `aida_data`:
 |---|---|---|
 | [Hephaestus](https://github.com/cecca/hephaestus) | yes | Uses ann-benchmarks/VIBE HDF5 files (example: `fashion-mnist-784-euclidean`). |
 | [PANNA](https://github.com/cecca/panna) | yes | `pypanna/datasets.py` registers the same datasets as `aida_data.dense`. |
-| [ATTIMO](https://github.com/Cecca/attimo) | no | Univariate time series (§3.1). |
-| [MOMENTI](https://github.com/aidaLabDEI/MOMENTI-motifs) | no | Multivariate time series (§3.2). |
+| [ATTIMO](https://github.com/Cecca/attimo) | partly | The figshare datasets, steamgen and most Motiflets series are available; `penguin`, the PAMAP time-series view, the MOMP `.mat` files and the unpublished ones are missing (§3.1). |
+| [MOMENTI](https://github.com/aidaLabDEI/MOMENTI-motifs) | partly | All datasets with a file in the repository, steamgen and FL010 are available; CLEAN_House1, whales and quake are missing (§3.2). |
 | [fair-clustering](https://github.com/Cecca/fair-clustering) | no | Colored tabular data (§2.1). Note: its `census1990` (USCensus1990) is not the ADBench `census` we have. |
 | [streaming-fair-center-clustering](https://github.com/aidaLabDEI/streaming-fair-center-clustering) | no | §2.1 (HIGGS, PHONES, COVERTYPE, BEERS) and §8 (UBER). |
 | [MACACO](https://github.com/Cecca/macaco) | no | §2.1 (Phones, Higgs) and §2.2 (Wikipedia, MusixMatch). |
@@ -284,8 +287,17 @@ except as download helpers.
 2. **Graphs** (`aida_data.graph`): add uncolored SNAP/KONECT loaders for the
    SILVAN/PERCIS/Tonic graphs; consider a separate temporal edge list type
    (`src dst timestamp`) for PRESTO/odeN/STEP.
-3. **Time series**: new `aida_data.timeseries` module for the ATTIMO and
-   MOMENTI datasets.
+3. ~~**Time series**: new `aida_data.timeseries` module for the ATTIMO and
+   MOMENTI datasets.~~ Done on 2026-10-08 (see `2026-10-08-timeseries.md`),
+   except: Motiflets `penguin` (9 tab-separated columns, 78 MB, and it is not
+   documented which ones the papers use), the Motiflets `.mat` files (the
+   `pyattimo` branch has no `datasets/momp/`, only insect recordings under
+   `PeVAMmotif/`; `pyattimo_refactor` was not checked), the PAMAP time-series
+   view, the tiny ATTIMO examples, the unpublished ATTIMO series
+   (Whales, VCAB, synthetic), and for MOMENTI CLEAN_House1 (not in the repo),
+   whales (needs a pipeline from NOAA audio clips) and quake (spectrogram band
+   energies of an ObsPy trace; the raw `quake.mseed` is not in the repo, so a
+   rebuilt series could not be checked against the paper).
 4. **Transactions / sequences**: a module for the FIMI/LIBSVM transactional
    datasets and the SPMF sequential datasets (all already hosted in the lab
    repositories).
