@@ -195,7 +195,7 @@ def test_biokdd(tmp_path):
     assert data.shape == (2, 74)
     np.testing.assert_array_equal(data[1], -np.arange(74))
     np.testing.assert_array_equal(colors.values[:, 0], [0, 1])
-    assert (tmp_path / "biokdd.hdf5").is_file()
+    assert (tmp_path / "biokdd.parquet").is_file()
 
 
 def test_metropt3(tmp_path):
@@ -300,12 +300,12 @@ def test_higgs_and_highlevel_share_the_cache(tmp_path):
     assert data.shape == (2, 28)
     np.testing.assert_allclose(data[0], np.arange(28) / 10, rtol=1e-6)
     assert _decode(colors, "label") == ["1", "0"]
-    mtime = (tmp_path / "higgs.hdf5").stat().st_mtime_ns
+    mtime = (tmp_path / "higgs.parquet").stat().st_mtime_ns
     high, _, _, colors_high = dense._load_higgs_highlevel(path)
     np.testing.assert_array_equal(high, data[:, -7:])
     assert high.flags["C_CONTIGUOUS"]
     np.testing.assert_array_equal(colors_high.values, colors.values)
-    assert (tmp_path / "higgs.hdf5").stat().st_mtime_ns == mtime
+    assert (tmp_path / "higgs.parquet").stat().st_mtime_ns == mtime
 
 
 @pytest.mark.network

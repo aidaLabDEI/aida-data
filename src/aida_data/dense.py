@@ -5,8 +5,8 @@ Datasets are collected from different sources
 Some datasets carry categorical attributes ("colors", e.g. sex or race for
 fair clustering). `load` returns them in `Dataset.colors` (see `Colors`),
 aligned with the rows of `Dataset.dataset`; for the other datasets
-`Dataset.colors` is None. Large datasets are parsed once and cached as HDF5
-next to the raw download.
+`Dataset.colors` is None. Large datasets are parsed once and cached as
+zstd-compressed parquet next to the raw download.
 """
 
 import io
@@ -24,6 +24,8 @@ from urllib.parse import urlparse
 import h5py
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 from sklearn.base import BaseEstimator, TransformerMixin
 
 from ._download import download as _download
@@ -31,6 +33,9 @@ from ._download import download as _download
 DATASETS_DIR = Path(os.environ.get("AIDA_DATA_DIR", "datasets"))
 
 _LOGGER = logging.getLogger("aida_data.dense")
+
+# Layout version of the parquet caches written by `_cached`.
+_CACHE_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -79,39 +84,70 @@ def _load_hdf5(path: Path):
         return hfp["train"][:], hfp["test"][:], hfp["distances"][:]
 
 
-def _cached(
-    path: Path, cache_name: str, build: Callable[[Path], tuple]
-) -> tuple[np.ndarray, Colors | None]:
-    """Parse `path` once with `build` and store the result in
-    `path.parent / f"{cache_name}.hdf5"`, so that later calls only read the
-    cache. `build(path)` returns `(features, colors)`, `colors` possibly None.
+def _write_parquet_cache(path: Path, data: np.ndarray, colors: Colors | None):
+    """Write `data` and `colors` to the parquet cache `path`.
 
-    The cache is keyed by dataset name rather than by the name of the raw
-    file, because several datasets may share one download.
+    One row per point: float32 columns `x0..x{d-1}` for the features, then
+    `color0..color{c-1}` for the color codes. Column names are positional,
+    the color names and labels are in the `aida_data` schema metadata.
     """
-    h5path = path.parent / f"{cache_name}.hdf5"
-    if not h5path.is_file():
-        _LOGGER.info("parsing %s into %s", path, h5path)
-        data, colors = build(path)
-        tmp_path = h5path.with_suffix(".hdf5.tmp")
-        with h5py.File(tmp_path, "w") as hfp:
-            hfp["X"] = data
-            if colors is not None:
-                # Store codes in the narrowest integer type, they are
-                # widened back to int64 on load.
-                codes = hfp.create_dataset(
-                    "colors",
-                    data=colors.values.astype(
-                        np.min_scalar_type(int(colors.values.max(initial=0)))
-                    ),
-                )
-                codes.attrs["names"] = json.dumps(colors.names)
-                codes.attrs["labels"] = json.dumps(colors.labels)
-        # Rename only once the file is complete, so that an interrupted parse
-        # does not leave a truncated cache behind.
-        tmp_path.replace(h5path)
+    columns = {f"x{j}": data[:, j] for j in range(data.shape[1])}
+    meta = {
+        "version": _CACHE_VERSION,
+        "n_features": data.shape[1],
+        "color_names": None,
+        "color_labels": None,
+    }
+    if colors is not None:
+        # Store codes in the narrowest integer type, they are widened back to
+        # int64 on load.
+        codes = colors.values.astype(
+            np.min_scalar_type(int(colors.values.max(initial=0)))
+        )
+        columns |= {f"color{j}": codes[:, j] for j in range(codes.shape[1])}
+        meta["color_names"] = list(colors.names)
+        meta["color_labels"] = [list(labels) for labels in colors.labels]
+    table = pa.table(columns).replace_schema_metadata(
+        {b"aida_data": json.dumps(meta).encode()}
+    )
+    tmp_path = path.with_suffix(".parquet.tmp")
+    pq.write_table(table, tmp_path, compression="zstd", compression_level=3)
+    # Rename only once the file is complete, so that an interrupted write
+    # does not leave a truncated cache behind.
+    tmp_path.replace(path)
 
-    with h5py.File(h5path) as hfp:
+
+def _read_parquet_cache(path: Path) -> tuple[np.ndarray, Colors | None]:
+    """Read a cache written by `_write_parquet_cache`."""
+    table = pq.read_table(path)
+    meta = json.loads((table.schema.metadata or {}).get(b"aida_data", b"null"))
+    if not isinstance(meta, dict) or meta.get("version") != _CACHE_VERSION:
+        raise ValueError(
+            f"{path} is not a cache in a known format, delete it to parse the "
+            "dataset again"
+        )
+    # Fill preallocated arrays one column at a time, rather than with
+    # `np.column_stack`, so that only one column is duplicated at a time.
+    data = np.empty((table.num_rows, meta["n_features"]), dtype=np.float32)
+    for j in range(data.shape[1]):
+        data[:, j] = table.column(f"x{j}").to_numpy()
+    colors = None
+    if meta["color_names"] is not None:
+        values = np.empty((table.num_rows, len(meta["color_names"])), dtype=np.int64)
+        for j in range(values.shape[1]):
+            values[:, j] = table.column(f"color{j}").to_numpy()
+        colors = Colors(
+            values,
+            tuple(meta["color_names"]),
+            tuple(tuple(labels) for labels in meta["color_labels"]),
+        )
+    del table
+    return data, colors
+
+
+def _read_hdf5_cache(path: Path) -> tuple[np.ndarray, Colors | None]:
+    """Read a cache written by aida_data < 0.2 (HDF5), only for migration."""
+    with h5py.File(path) as hfp:
         data = hfp["X"][:]
         if "colors" not in hfp:
             return data, None
@@ -122,6 +158,34 @@ def _cached(
             tuple(tuple(labels) for labels in json.loads(codes.attrs["labels"])),
         )
     return data, colors
+
+
+def _cached(
+    path: Path, cache_name: str, build: Callable[[Path], tuple]
+) -> tuple[np.ndarray, Colors | None]:
+    """Parse `path` once with `build` and store the result in
+    `path.parent / f"{cache_name}.parquet"`, so that later calls only read the
+    cache. `build(path)` returns `(features, colors)`, `colors` possibly None.
+
+    The cache is a zstd-compressed parquet file with one row per point and
+    one column per feature and per color (see `_write_parquet_cache`). It is
+    keyed by dataset name rather than by the name of the raw file, because
+    several datasets may share one download.
+    """
+    cache = path.parent / f"{cache_name}.parquet"
+    if not cache.is_file():
+        legacy = path.parent / f"{cache_name}.hdf5"
+        if legacy.is_file():
+            # Migrate a cache written by aida_data < 0.2 without re-parsing.
+            _LOGGER.info("converting %s to %s", legacy, cache)
+            _write_parquet_cache(cache, *_read_hdf5_cache(legacy))
+            legacy.unlink()
+        else:
+            _LOGGER.info("parsing %s into %s", path, cache)
+            _write_parquet_cache(cache, *build(path))
+    # Always read back from the file, so that the first and later calls
+    # return identical arrays.
+    return _read_parquet_cache(cache)
 
 
 def _split_table(

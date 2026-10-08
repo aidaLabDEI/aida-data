@@ -26,6 +26,10 @@ ds = load("glove-100-angular", pipeline, load_queries=True)
 print(pipeline.named_steps["pca"].explained_variance_ratio_)
 ```
 
+Datasets are downloaded to `datasets/` (or `$AIDA_DATA_DIR`). Large datasets
+are parsed once into a zstd-compressed `<name>.parquet` cache next to the
+download.
+
 </details>
 
 <details>

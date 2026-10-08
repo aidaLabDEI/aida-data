@@ -198,7 +198,7 @@ def test_cached_parses_once(tmp_path):
         return FEATURES.copy(), COLORS
 
     data, colors = dense._cached(raw, "mycache", build)
-    cache = tmp_path / "mycache.hdf5"
+    cache = tmp_path / "mycache.parquet"
     mtime = cache.stat().st_mtime_ns
     data2, colors2 = dense._cached(raw, "mycache", build)
     assert len(calls) == 1
@@ -209,7 +209,7 @@ def test_cached_parses_once(tmp_path):
         assert c.values.dtype == np.int64
         assert c.names == COLORS.names
         assert c.labels == COLORS.labels
-    assert not (tmp_path / "mycache.hdf5.tmp").exists()
+    assert not (tmp_path / "mycache.parquet.tmp").exists()
 
 
 def test_cached_without_colors(tmp_path):
@@ -233,4 +233,81 @@ def test_pamap_parsed_from_zip_and_cached(tmp_path):
     data, _, _ = dense._load_pamap(path)
     assert data.shape == (18, 2)
     np.testing.assert_array_equal(data[:2], [[2.0, 3.0], [4.0, 0.0]])
-    assert (tmp_path / "pamap.hdf5").is_file()
+    assert (tmp_path / "pamap.parquet").is_file()
+
+
+def test_cached_round_trip_types(tmp_path):
+    labels = (("", "a b", "naïve", "日本"), ("x",))
+    values = np.array([[0, 0], [1, 0], [2, 0], [3, 0]], dtype=np.int64)
+    features = np.arange(12, dtype=np.float32).reshape(4, 3)
+    colors = Colors(values, ("näme with space", ""), labels)
+    data, out = dense._cached(tmp_path / "raw", "types", lambda path: (features, colors))
+    assert data.dtype == np.float32
+    assert data.flags["C_CONTIGUOUS"]
+    np.testing.assert_array_equal(data, features)
+    assert out.values.dtype == np.int64
+    np.testing.assert_array_equal(out.values, values)
+    assert out.names == colors.names
+    assert out.labels == labels
+
+
+def test_cached_preserves_nan_and_inf(tmp_path):
+    features = np.array(
+        [[np.nan, 1.0], [np.inf, -np.inf], [-0.0, 2.5]], dtype=np.float32
+    )
+    data, _ = dense._cached(tmp_path / "raw", "nan", lambda path: (features, None))
+    np.testing.assert_array_equal(data, features)
+    assert np.signbit(data[2, 0])
+
+
+def test_cached_wide_color_codes(tmp_path):
+    import pyarrow.parquet as pq
+
+    values = np.arange(300, dtype=np.int64)[:, np.newaxis]
+    colors = Colors(values, ("c",), (tuple(str(i) for i in range(300)),))
+    features = np.zeros((300, 1), dtype=np.float32)
+    _, out = dense._cached(tmp_path / "raw", "wide", lambda path: (features, colors))
+    assert pq.read_schema(tmp_path / "wide.parquet").field("color0").type == "uint16"
+    np.testing.assert_array_equal(out.values, values)
+
+
+def _write_legacy_cache(path, data, colors):
+    import json
+
+    import h5py
+
+    with h5py.File(path, "w") as hfp:
+        hfp["X"] = data
+        if colors is not None:
+            codes = hfp.create_dataset("colors", data=colors.values.astype(np.uint8))
+            codes.attrs["names"] = json.dumps(colors.names)
+            codes.attrs["labels"] = json.dumps(colors.labels)
+
+
+def test_cached_migrates_legacy_hdf5(tmp_path):
+    _write_legacy_cache(tmp_path / "old.hdf5", FEATURES, COLORS)
+
+    def build(path):
+        raise AssertionError("the legacy cache must not be parsed again")
+
+    data, colors = dense._cached(tmp_path / "raw", "old", build)
+    np.testing.assert_array_equal(data, FEATURES)
+    np.testing.assert_array_equal(colors.values, COLOR_VALUES)
+    assert colors.names == COLORS.names
+    assert colors.labels == COLORS.labels
+    assert (tmp_path / "old.parquet").is_file()
+    assert not (tmp_path / "old.hdf5").exists()
+
+
+def test_cached_unknown_version_raises(tmp_path):
+    import json
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    meta = {"version": 2, "n_features": 1, "color_names": None, "color_labels": None}
+    table = pa.table({"x0": np.zeros(2, dtype=np.float32)})
+    table = table.replace_schema_metadata({b"aida_data": json.dumps(meta).encode()})
+    pq.write_table(table, tmp_path / "future.parquet")
+    with pytest.raises(ValueError, match="future.parquet"):
+        dense._cached(tmp_path / "raw", "future", None)
