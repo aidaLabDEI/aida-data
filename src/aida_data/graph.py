@@ -36,6 +36,10 @@ _LOGGER = logging.getLogger("aida_data.graph")
 # Layout version of the parquet caches written by `_cached`.
 _CACHE_VERSION = 1
 
+# Largest edge count whose adjacency list is stored with int32 offsets
+# (arrow `list`); larger graphs use int64 offsets (arrow `large_list`).
+_MAX_LIST_OFFSET = 2**31 - 1
+
 
 def _read_int_pairs(path: Path) -> np.ndarray:
     return pd.read_csv(
@@ -251,6 +255,14 @@ def _color_dtype(colors: np.ndarray) -> np.dtype:
     raise AssertionError("unreachable: colors are int64")
 
 
+def _adjacency_offsets(counts: np.ndarray) -> np.ndarray:
+    """List offsets `[0, c0, c0 + c1, ...]` of the neighbor counts `counts`,
+    as int64 so that they cannot wrap around for 2^31 or more edges."""
+    offsets = np.zeros(len(counts) + 1, dtype=np.int64)
+    np.cumsum(counts, out=offsets[1:])
+    return offsets
+
+
 def _write_parquet_cache(path: Path, edges: np.ndarray, colors: np.ndarray):
     """Write the graph to the parquet cache `path`.
 
@@ -258,15 +270,17 @@ def _write_parquet_cache(path: Path, edges: np.ndarray, colors: np.ndarray):
     lexicographically, whose ids are below `len(colors)`. One row per node
     `v = 0..n-1`: `nbrs` is the list of out-neighbors of `v` in the
     orientation of the source, sorted ascending (an adjacency list, stored
-    as parquet values plus offsets), and `color` is the color of `v`.
+    as parquet values plus offsets), and `color` is the color of `v`. The
+    offsets are int32 (arrow `list`), or int64 (arrow `large_list`) for
+    2^31 or more edges.
     """
     n = len(colors)
-    counts = np.bincount(edges[:, 0], minlength=n)
-    offsets = np.zeros(n + 1, dtype=np.int32)
-    np.cumsum(counts, out=offsets[1:])
-    nbrs = pa.ListArray.from_arrays(
-        pa.array(offsets), pa.array(edges[:, 1].astype(_index_dtype(n)))
-    )
+    offsets = _adjacency_offsets(np.bincount(edges[:, 0], minlength=n))
+    values = pa.array(edges[:, 1].astype(_index_dtype(n)))
+    if len(edges) <= _MAX_LIST_OFFSET:
+        nbrs = pa.ListArray.from_arrays(pa.array(offsets, pa.int32()), values)
+    else:
+        nbrs = pa.LargeListArray.from_arrays(pa.array(offsets), values)
     meta = {"version": _CACHE_VERSION, "n_nodes": n, "n_edges": len(edges)}
     table = pa.table({"nbrs": nbrs, "color": colors.astype(_color_dtype(colors))})
     # Almost all neighbor ids are distinct, so dictionary encoding does not
@@ -286,9 +300,10 @@ def _read_parquet_cache(path: Path) -> tuple[np.ndarray, np.ndarray]:
     table, _ = read_table(path, _CACHE_VERSION)
     nbrs = table.column("nbrs").combine_chunks()
     colors = table.column("color").to_numpy().astype(np.int64)
-    edges = np.empty((len(nbrs.flatten()), 2), dtype=np.int64)
+    values = nbrs.flatten()
+    edges = np.empty((len(values), 2), dtype=np.int64)
     edges[:, 0] = np.repeat(np.arange(len(nbrs), dtype=np.int64), np.diff(nbrs.offsets))
-    edges[:, 1] = nbrs.flatten().to_numpy()
+    edges[:, 1] = values.to_numpy()
     return edges, colors
 
 

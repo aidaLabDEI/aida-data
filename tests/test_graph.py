@@ -174,6 +174,37 @@ def test_cache_is_adjacency_list_with_delta_encoding(tmp_path):
     assert "DELTA_BINARY_PACKED" in encodings
 
 
+# Isolated node 1, nodes with several neighbors, and more edges than the
+# lowered list offset limit in the large_list test.
+_OFFSET_EDGES = np.array([[0, 2], [0, 3], [2, 0], [2, 3], [2, 4], [4, 1]])
+_OFFSET_COLORS = np.array([1, -1, 0, 2, 3])
+
+
+def test_cache_uses_large_list_past_offset_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(graph, "_MAX_LIST_OFFSET", 3)
+    path = tmp_path / "large.parquet"
+    graph._write_parquet_cache(path, _OFFSET_EDGES, _OFFSET_COLORS)
+    assert str(pq.read_schema(path).field("nbrs").type).startswith("large_list<")
+    got_edges, got_colors = graph._read_parquet_cache(path)
+    np.testing.assert_array_equal(got_edges, _OFFSET_EDGES)
+    np.testing.assert_array_equal(got_colors, _OFFSET_COLORS)
+    assert got_edges.dtype == got_colors.dtype == np.int64
+
+
+def test_cache_uses_list_below_offset_limit(tmp_path):
+    path = tmp_path / "small.parquet"
+    graph._write_parquet_cache(path, _OFFSET_EDGES, _OFFSET_COLORS)
+    assert str(pq.read_schema(path).field("nbrs").type) == "list<element: int32>"
+    got_edges, _ = graph._read_parquet_cache(path)
+    np.testing.assert_array_equal(got_edges, _OFFSET_EDGES)
+
+
+def test_adjacency_offsets_do_not_wrap():
+    offsets = graph._adjacency_offsets(np.array([2**31, 1]))
+    assert offsets.dtype == np.int64
+    np.testing.assert_array_equal(offsets, [0, 2**31, 2**31 + 1])
+
+
 def test_cache_has_one_row_per_node():
     g = load_edge_list("tiny")
     table = pq.read_table(graph.cache_path("tiny"))
