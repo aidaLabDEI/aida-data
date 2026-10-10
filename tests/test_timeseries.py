@@ -202,6 +202,72 @@ def test_load_tsf_rejects_unequal_lengths_and_data_before_tag(tmp_path):
         timeseries._load_tsf(path)
 
 
+# start_timestamp is the last attribute, as in the Monash files
+TSF_LAST = """\
+@attribute series_name string
+@attribute type string
+@attribute start_timestamp date
+@frequency hourly
+@data
+T1:temperature:2010-01-01 00-00-00:1.5,?,3
+T2:pressure:2010-01-01 00-00-00:10,20,30
+"""
+
+
+def test_load_tsf_colon_clock_in_last_attribute(tmp_path):
+    path = tmp_path / "s.tsf"
+    path.write_text(TSF_LAST.replace("00-00-00", "00:00:00"))
+    values, dim_names, time = timeseries._load_tsf(path)
+    assert dim_names == ["temperature", "pressure"]
+    np.testing.assert_array_equal(values, [[1.5, 10], [np.nan, 20], [3, 30]])
+    assert time[0] == np.datetime64("2010-01-01T00:00:00")
+    assert time[2] == np.datetime64("2010-01-01T02:00:00")
+
+
+def test_load_tsf_colon_and_dash_clocks_give_identical_output(tmp_path):
+    path = tmp_path / "s.tsf"
+    path.write_text(TSF_LAST)
+    dashes = timeseries._load_tsf(path)
+    path.write_text(TSF_LAST.replace("00-00-00", "00:00:00"))
+    colons = timeseries._load_tsf(path)
+    np.testing.assert_array_equal(dashes[0], colons[0])
+    assert dashes[1] == colons[1]
+    np.testing.assert_array_equal(dashes[2], colons[2])
+
+
+def test_load_tsf_date_only_start_timestamp_starts_at_midnight(tmp_path):
+    path = tmp_path / "s.tsf"
+    path.write_text(TSF_LAST.replace(" 00-00-00", ""))
+    _, _, time = timeseries._load_tsf(path)
+    assert time[0] == np.datetime64("2010-01-01T00:00:00")
+    assert time[1] == np.datetime64("2010-01-01T01:00:00")
+
+
+def test_load_tsf_colon_in_non_last_attribute_raises(tmp_path):
+    path = tmp_path / "s.tsf"
+    path.write_text(TSF_LAST.replace("T2:pressure", "T2:pres:sure"))
+    with pytest.raises(ValueError, match=r"line 7 .*start_timestamp"):
+        timeseries._load_tsf(path)
+
+
+def test_load_tsf_too_few_fields_raises_with_line_number(tmp_path):
+    path = tmp_path / "s.tsf"
+    path.write_text(TSF_LAST.replace("T2:pressure:", "T2:"))
+    with pytest.raises(ValueError, match="line 7"):
+        timeseries._load_tsf(path)
+
+
+def test_load_tsf_without_attributes(tmp_path):
+    path = tmp_path / "s.tsf"
+    path.write_text("@frequency hourly\n@data\n1,2,3\n")
+    values, dim_names, time = timeseries._load_tsf(path)
+    np.testing.assert_array_equal(values, [[1], [2], [3]])
+    assert dim_names is None and time is None
+    path.write_text("@data\nT1:1,2,3\n")
+    with pytest.raises(ValueError, match="line 2"):
+        timeseries._load_tsf(path)
+
+
 def test_load_wfdb_reads_a_record(tmp_path):
     wfdb = pytest.importorskip("wfdb")
     signal = np.column_stack([np.linspace(-1, 1, 50), np.sin(np.arange(50) / 5)])
