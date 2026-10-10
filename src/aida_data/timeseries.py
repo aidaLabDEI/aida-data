@@ -14,6 +14,7 @@ set.
 
 import logging
 import os
+import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import partial
@@ -95,6 +96,10 @@ _TSF_STEPS = {
     "weekly": np.timedelta64(1, "W"),
 }
 
+# A `.tsf` date attribute: "2010-01-01", "2010-01-01 00-00-00" or
+# "2010-01-01 00:00:00".
+_TSF_DATE = re.compile(r"\d{4}-\d{2}-\d{2}( \d{2}([-:])\d{2}\2\d{2})?$")
+
 
 def _load_tsf(path: Path) -> Parsed:
     """A multivariate series from a Monash `.tsf` file in which every series
@@ -105,20 +110,27 @@ def _load_tsf(path: Path) -> Parsed:
     `?` marks a missing value, which becomes NaN. The dimensions are named
     after the `type` attribute if it is there and distinct, else after
     `series_name`.
+
+    The values never contain `:`, and the last attribute may: a
+    `start_timestamp` written `2010-01-01 00:00:00` is read like the Monash
+    form `2010-01-01 00-00-00`, and a date with no clock means midnight.
     """
     attributes: list[str] = []
+    attribute_types: list[str] = []
     frequency = None
     in_data = False
     rows = []
     with open(path, encoding="latin-1") as f:
-        for line in f:
+        for i, line in enumerate(f, 1):
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
             if line.startswith("@"):
                 key, _, rest = line.partition(" ")
                 if key == "@attribute":
-                    attributes.append(rest.split()[0])
+                    name, *kind = rest.split()
+                    attributes.append(name)
+                    attribute_types.append(kind[0] if kind else "")
                 elif key == "@frequency":
                     frequency = rest.strip()
                 elif key == "@data":
@@ -126,10 +138,30 @@ def _load_tsf(path: Path) -> Parsed:
                 continue
             if not in_data:
                 raise ValueError(f"{path}: series before the @data tag")
-            fields, _, raw = line.rpartition(":")
-            fields = fields.split(":")
-            if len(fields) != len(attributes):
-                raise ValueError(f"{path}: expected {len(attributes)} attributes")
+            fields, colon, raw = line.rpartition(":")
+            if not attributes:
+                if colon:
+                    raise ValueError(
+                        f"{path}: line {i} has attributes but the file declares none"
+                    )
+                fields = []
+            else:
+                fields = fields.split(":", len(attributes) - 1)
+                if not colon or len(fields) < len(attributes):
+                    raise ValueError(
+                        f"{path}: line {i} has fewer fields than the "
+                        f"{len(attributes)} attributes"
+                    )
+                # Only a time stamp may hold the extra colons, anything else
+                # means a colon in an earlier attribute and the split is
+                # ambiguous.
+                if ":" in fields[-1] and not (
+                    attribute_types[-1] == "date" and _TSF_DATE.match(fields[-1])
+                ):
+                    raise ValueError(
+                        f"{path}: line {i} has more ':' than attributes; only the "
+                        f"last attribute ({attributes[-1]}) may contain ':'"
+                    )
             series = np.array(raw.replace("?", "nan").split(","), dtype=np.float64)
             rows.append((dict(zip(attributes, fields)), series))
     if not rows:
@@ -148,9 +180,12 @@ def _load_tsf(path: Path) -> Parsed:
     time = None
     starts = {fields.get("start_timestamp") for fields, _ in rows}
     if len(starts) == 1 and None not in starts and frequency in _TSF_STEPS:
-        # "2010-01-01 00-00-00" -> "2010-01-01T00:00:00"
+        # "2010-01-01 00-00-00" or "2010-01-01 00:00:00" -> "2010-01-01T00:00:00",
+        # "2010-01-01" -> midnight
         day, _, clock = starts.pop().partition(" ")
-        start = np.datetime64(f"{day}T{clock.replace('-', ':')}", "ms")
+        start = np.datetime64(
+            f"{day}T{clock.replace('-', ':')}" if clock else day, "ms"
+        )
         time = start + np.arange(len(values)) * _TSF_STEPS[frequency].astype(
             "timedelta64[ms]"
         )
