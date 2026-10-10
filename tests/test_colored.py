@@ -209,7 +209,7 @@ def test_cached_parses_once(tmp_path):
         assert c.values.dtype == np.int64
         assert c.names == COLORS.names
         assert c.labels == COLORS.labels
-    assert not (tmp_path / "mycache.parquet.tmp").exists()
+    assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_cached_without_colors(tmp_path):

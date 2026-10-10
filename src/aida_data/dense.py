@@ -29,6 +29,7 @@ from sklearn.base import BaseEstimator, TransformerMixin
 
 from ._cache import KEEP_RAW, delete_raw, read_table, write_table
 from ._download import download as _download
+from ._tmp import stale_temporaries
 
 DATASETS_DIR = Path(os.environ.get("AIDA_DATA_DIR", "datasets"))
 
@@ -1204,7 +1205,9 @@ def _raw_is_shared(path: Path, cache_name: str | None) -> bool:
 def prune_raw(dry_run: bool = True) -> list[Path]:
     """Raw downloads of cached datasets that are no longer needed, because
     their cache exists and no other dataset uses them. With
-    `dry_run=False` they are deleted.
+    `dry_run=False` they are deleted. Also lists the
+    `*.part` and `*.parquet.tmp` files left by downloads and cache
+    writes that were killed, once they are more than 24 hours old.
     """
     paths = []
     for name, info in _DATASETS_INFO.items():
@@ -1217,9 +1220,10 @@ def prune_raw(dry_run: bool = True) -> list[Path]:
             and not _raw_is_shared(path, info.cache_name)
         ):
             paths.append(path)
+    paths += stale_temporaries(DATASETS_DIR)
     total = sum(path.stat().st_size for path in paths)
     _LOGGER.info(
-        "%s %d raw files (%.1f MiB): %s",
+        "%s %d raw and stale temporary files (%.1f MiB): %s",
         "would delete" if dry_run else "deleting",
         len(paths),
         total / 2**20,

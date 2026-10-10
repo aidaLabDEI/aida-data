@@ -147,7 +147,7 @@ def test_cache_round_trip_is_bit_identical(tmp_path):
     np.testing.assert_array_equal(got_edges, edges)
     np.testing.assert_array_equal(got_colors, colors)
     assert got_edges.dtype == got_colors.dtype == np.int64
-    assert path.with_suffix(".parquet.tmp").exists() is False
+    assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_cache_without_edges(tmp_path):

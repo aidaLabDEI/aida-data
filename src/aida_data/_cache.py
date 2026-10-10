@@ -8,6 +8,8 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from ._tmp import atomic_path
+
 _LOGGER = logging.getLogger("aida_data.cache")
 
 # Keep the raw download of a cached dataset after parsing it.
@@ -20,11 +22,11 @@ def write_table(path: Path, table: pa.Table, meta: dict, **options):
     compression defaults to zstd level 3."""
     options = {"compression": "zstd", "compression_level": 3} | options
     table = table.replace_schema_metadata({b"aida_data": json.dumps(meta).encode()})
-    tmp_path = path.with_suffix(".parquet.tmp")
-    pq.write_table(table, tmp_path, **options)
-    # Rename only once the file is complete, so that an interrupted write
-    # does not leave a truncated cache behind.
-    tmp_path.replace(path)
+    # Write to a unique temporary file and rename it only once it is
+    # complete, so that an interrupted write leaves neither a truncated
+    # cache nor a temporary file behind.
+    with atomic_path(path, ".parquet.tmp") as tmp_path:
+        pq.write_table(table, tmp_path, **options)
 
 
 def read_table(path: Path, version: int) -> tuple[pa.Table, dict]:

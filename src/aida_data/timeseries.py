@@ -26,6 +26,7 @@ import pyarrow as pa
 
 from ._cache import KEEP_RAW, delete_raw, read_table, write_table
 from ._download import download as _download
+from ._tmp import stale_temporaries
 
 DATASETS_DIR = Path(os.environ.get("AIDA_DATA_DIR", "datasets"))
 
@@ -486,7 +487,9 @@ def _needed_by_others(name: str, path: Path) -> bool:
 
 def prune_raw(dry_run: bool = True) -> list[Path]:
     """Raw downloads of datasets whose cache exists, which are no longer
-    needed. With `dry_run=False` they are deleted.
+    needed. With `dry_run=False` they are deleted. Also lists the
+    `*.part` and `*.parquet.tmp` files left by downloads and cache
+    writes that were killed, once they are more than 24 hours old.
     """
     paths = []
     for name in _DATASETS_INFO:
@@ -498,9 +501,10 @@ def prune_raw(dry_run: bool = True) -> list[Path]:
                 and path not in paths
                 and not _needed_by_others(name, path)
             ]
+    paths += stale_temporaries(DATASETS_DIR / "timeseries")
     total = sum(path.stat().st_size for path in paths)
     _LOGGER.info(
-        "%s %d raw files (%.1f MiB): %s",
+        "%s %d raw and stale temporary files (%.1f MiB): %s",
         "would delete" if dry_run else "deleting",
         len(paths),
         total / 2**20,

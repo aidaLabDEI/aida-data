@@ -251,7 +251,7 @@ def test_cache_round_trip_is_bit_identical(tmp_path):
     assert dim_names == ("a", "b")
     assert time.dtype == np.dtype("datetime64[ms]")
     np.testing.assert_array_equal(time, TIME)
-    assert not path.with_suffix(".parquet.tmp").exists()
+    assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_cache_round_trip_univariate_without_time(tmp_path):

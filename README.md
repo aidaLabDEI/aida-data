@@ -29,10 +29,13 @@ print(pipeline.named_steps["pca"].explained_variance_ratio_)
 Datasets are downloaded to `datasets/` (or `$AIDA_DATA_DIR`). Large datasets
 are parsed once into a zstd-compressed `<name>.parquet` cache next to the
 download. The raw download is then deleted, since it is not needed anymore;
-set `AIDA_DATA_KEEP_RAW=1` to keep it. Downloads are written to
-`<name>.part` and renamed once complete; a leftover `.part` file is safe to
-delete. Raw files left over from earlier
-versions can be removed with `prune_raw`:
+set `AIDA_DATA_KEEP_RAW=1` to keep it. Downloads and caches are written to
+a temporary file with a unique name (`<name>.<random>.part` or
+`<name>.parquet.<random>.parquet.tmp`) and renamed once complete, so
+concurrent loads of the same dataset do not clash. A process that is killed
+can leave such a `*.part` or `*.tmp` file behind; it is safe to delete, and
+`prune_raw` removes the ones older than 24 hours. Raw files left over from
+earlier versions can be removed with `prune_raw` too:
 
 ```python
 from aida_data import dense
@@ -94,7 +97,8 @@ Each graph is parsed once into `datasets/graphs/<name>.parquet` (or under
 (`nbrs`: sorted out-neighbors, `color`), roughly a tenth of the size of the
 TSV files. The TSV files are then deleted; set `AIDA_DATA_KEEP_RAW=1` to keep
 them, or call `graph.prune_raw(dry_run=False)` to remove the ones left over
-from earlier versions (`graph.prune_raw()` is a dry run). The options of
+from earlier versions, along with stale `*.part`/`*.tmp` files (`graph.prune_raw()`
+is a dry run). The options of
 `load_edge_list` are applied when reading the cache.
 
 </details>
@@ -135,7 +139,8 @@ Each series is parsed once into `datasets/timeseries/<name>.parquet` (or under
 `$AIDA_DATA_DIR`), a zstd-compressed float64 file, about the size of the
 gzipped text and roughly ten times faster to read than to parse. The raw files
 are then deleted; set `AIDA_DATA_KEEP_RAW=1` to keep them, or call
-`timeseries.prune_raw(dry_run=False)` to remove the ones left over
+`timeseries.prune_raw(dry_run=False)` to remove the ones left over, along with
+stale `*.part`/`*.tmp` files
 (`timeseries.prune_raw()` is a dry run).
 
 </details>
