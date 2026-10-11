@@ -16,7 +16,6 @@ deleted unless `KEEP_RAW` is set.
 """
 
 import logging
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -28,9 +27,10 @@ import pyarrow as pa
 
 from ._cache import KEEP_RAW, delete_raw, read_table, write_table
 from ._download import download as _download
+from ._paths import datasets_dir
 from ._tmp import stale_temporaries
 
-DATASETS_DIR = Path(os.environ.get("AIDA_DATA_DIR", "datasets"))
+DATASETS_DIR = datasets_dir()
 
 _LOGGER = logging.getLogger("aida_data.graph")
 

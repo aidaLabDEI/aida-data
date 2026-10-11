@@ -47,17 +47,25 @@ def fake_datasets(tmp_path, monkeypatch):
     return downloads
 
 
-def test_raw_deleted_after_parse(tmp_path):
+@pytest.fixture
+def dense_dir(tmp_path):
+    """Where the dense datasets go under the patched `DATASETS_DIR`."""
+    directory = tmp_path / "dense"
+    directory.mkdir()
+    return directory
+
+
+def test_raw_deleted_after_parse(dense_dir):
     ds = load("fake")
     np.testing.assert_array_equal(ds.dataset, FEATURES)
-    assert (tmp_path / "fake.parquet").is_file()
-    assert not (tmp_path / "fake.zip").exists()
+    assert (dense_dir / "fake.parquet").is_file()
+    assert not (dense_dir / "fake.zip").exists()
 
 
-def test_keep_raw(tmp_path, monkeypatch):
+def test_keep_raw(dense_dir, monkeypatch):
     monkeypatch.setattr(dense, "KEEP_RAW", True)
     load("fake")
-    assert (tmp_path / "fake.zip").is_file()
+    assert (dense_dir / "fake.zip").is_file()
 
 
 def test_no_redownload_once_cached(monkeypatch, fake_datasets):
@@ -73,26 +81,26 @@ def test_no_redownload_once_cached(monkeypatch, fake_datasets):
     assert ds.colors.labels == COLORS.labels
 
 
-def test_migration_keeps_raw(tmp_path):
+def test_migration_keeps_raw(dense_dir):
     import h5py
 
-    with h5py.File(tmp_path / "fake.hdf5", "w") as hfp:
+    with h5py.File(dense_dir / "fake.hdf5", "w") as hfp:
         hfp["X"] = FEATURES
-    (tmp_path / "fake.zip").write_text("raw")
+    (dense_dir / "fake.zip").write_text("raw")
     ds = load("fake")
     np.testing.assert_array_equal(ds.dataset, FEATURES)
     assert ds.colors is None
-    assert (tmp_path / "fake.parquet").is_file()
-    assert not (tmp_path / "fake.hdf5").exists()
-    assert (tmp_path / "fake.zip").is_file()
+    assert (dense_dir / "fake.parquet").is_file()
+    assert not (dense_dir / "fake.hdf5").exists()
+    assert (dense_dir / "fake.zip").is_file()
 
 
-def test_shared_raw_file_kept(tmp_path):
+def test_shared_raw_file_kept(dense_dir):
     load("fake-a")
-    assert (tmp_path / "fake-a.parquet").is_file()
-    assert (tmp_path / "shared.zip").is_file()
+    assert (dense_dir / "fake-a.parquet").is_file()
+    assert (dense_dir / "shared.zip").is_file()
     load("fake-b")
-    assert (tmp_path / "shared.zip").is_file()
+    assert (dense_dir / "shared.zip").is_file()
 
 
 _REAL_CACHED = [
@@ -109,7 +117,7 @@ _REAL_CACHED = [
 
 
 @pytest.mark.parametrize("name", _REAL_CACHED)
-def test_registered_cache_names_match_loaders(tmp_path, monkeypatch, name):
+def test_registered_cache_names_match_loaders(dense_dir, monkeypatch, name):
     def fail(url, destination):
         raise AssertionError("must not download")
 
@@ -117,20 +125,20 @@ def test_registered_cache_names_match_loaders(tmp_path, monkeypatch, name):
     data = np.arange(3 * 28, dtype=np.float32).reshape(3, 28)
     colors = Colors(np.array([[0], [1], [1]]), ("label",), (("0", "1"),))
     cache_name = dense._DATASETS_INFO[name].cache_name
-    dense._write_parquet_cache(tmp_path / f"{cache_name}.parquet", data, colors)
+    dense._write_parquet_cache(dense_dir / f"{cache_name}.parquet", data, colors)
     ds = load(name)
     expected = data[:, -7:] if name == "higgs-highlevel" else data
     np.testing.assert_array_equal(ds.dataset, expected)
 
 
-def test_prune_raw(tmp_path, monkeypatch):
+def test_prune_raw(dense_dir, monkeypatch):
     monkeypatch.setattr(dense, "KEEP_RAW", True)
     load("fake")
     load("fake-a")
-    (tmp_path / "unrelated.csv").write_text("x")
-    assert dense.prune_raw() == [tmp_path / "fake.zip"]
-    assert (tmp_path / "fake.zip").is_file()
-    assert dense.prune_raw(dry_run=False) == [tmp_path / "fake.zip"]
-    assert not (tmp_path / "fake.zip").exists()
-    assert (tmp_path / "shared.zip").is_file()
-    assert (tmp_path / "unrelated.csv").is_file()
+    (dense_dir / "unrelated.csv").write_text("x")
+    assert dense.prune_raw() == [dense_dir / "fake.zip"]
+    assert (dense_dir / "fake.zip").is_file()
+    assert dense.prune_raw(dry_run=False) == [dense_dir / "fake.zip"]
+    assert not (dense_dir / "fake.zip").exists()
+    assert (dense_dir / "shared.zip").is_file()
+    assert (dense_dir / "unrelated.csv").is_file()

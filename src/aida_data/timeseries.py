@@ -13,7 +13,6 @@ set.
 """
 
 import logging
-import os
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -27,9 +26,10 @@ import pyarrow as pa
 
 from ._cache import KEEP_RAW, delete_raw, read_table, write_table
 from ._download import download as _download
+from ._paths import datasets_dir
 from ._tmp import stale_temporaries
 
-DATASETS_DIR = Path(os.environ.get("AIDA_DATA_DIR", "datasets"))
+DATASETS_DIR = datasets_dir()
 
 _LOGGER = logging.getLogger("aida_data.timeseries")
 

@@ -12,7 +12,6 @@ zstd-compressed parquet next to the raw download.
 import io
 import json
 import logging
-import os
 import tarfile
 import zipfile
 from dataclasses import dataclass, replace
@@ -29,9 +28,10 @@ from sklearn.base import BaseEstimator, TransformerMixin
 
 from ._cache import KEEP_RAW, delete_raw, read_table, write_table
 from ._download import download as _download
+from ._paths import datasets_dir
 from ._tmp import stale_temporaries
 
-DATASETS_DIR = Path(os.environ.get("AIDA_DATA_DIR", "datasets"))
+DATASETS_DIR = datasets_dir()
 
 _LOGGER = logging.getLogger("aida_data.dense")
 
@@ -1177,8 +1177,12 @@ def _raw_name(info: DatasetInfo) -> str:
     return Path(urlparse(info.url).path).name
 
 
+def _dense_dir() -> Path:
+    return DATASETS_DIR / "dense"
+
+
 def local_path(name: str):
-    return DATASETS_DIR / _raw_name(_DATASETS_INFO[name])
+    return _dense_dir() / _raw_name(_DATASETS_INFO[name])
 
 
 def _cache_exists(name: str) -> bool:
@@ -1188,7 +1192,7 @@ def _cache_exists(name: str) -> bool:
     if cache_name is None:
         return False
     return any(
-        (DATASETS_DIR / f"{cache_name}{suffix}").is_file()
+        (_dense_dir() / f"{cache_name}{suffix}").is_file()
         for suffix in (".parquet", ".hdf5")
     )
 
@@ -1220,7 +1224,7 @@ def prune_raw(dry_run: bool = True) -> list[Path]:
             and not _raw_is_shared(path, info.cache_name)
         ):
             paths.append(path)
-    paths += stale_temporaries(DATASETS_DIR)
+    paths += stale_temporaries(_dense_dir())
     total = sum(path.stat().st_size for path in paths)
     _LOGGER.info(
         "%s %d raw and stale temporary files (%.1f MiB): %s",
@@ -1297,8 +1301,7 @@ def load(
         raise KeyError(
             f"Dataset `{name}` not available. Pick one of {available_datasets()}"
         )
-    if not DATASETS_DIR.is_dir():
-        DATASETS_DIR.mkdir()
+    _dense_dir().mkdir(parents=True, exist_ok=True)
 
     info = _DATASETS_INFO[name]
     url, loader, distance = info.url, info.loader_function, info.distance_type

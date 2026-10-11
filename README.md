@@ -4,6 +4,28 @@ This repository contains code for downloading and preprocessing datasets
 used across software project of the [AIDA Lab](https://aidalabdei.github.io/)
 at the Department of Information Engineering of the University of Padova.
 
+## Where the datasets are stored
+
+Datasets are downloaded and cached once per user, in a root directory shared
+by every project, notebook and working directory. The root is the first of:
+
+1. `$AIDA_DATA_DIR`, if set and non-empty (`~` is expanded);
+2. `$XDG_CACHE_HOME/aida-data`, if `XDG_CACHE_HOME` is set to an absolute path;
+3. `~/.cache/aida-data`.
+
+Everything under it can be downloaded or rebuilt again, which is why it lives
+in the cache directory. Each module has its own subdirectory:
+
+```
+<root>/
+  dense/        dense datasets
+  graphs/       graphs
+  timeseries/   time series
+```
+
+Raw downloads are deleted once they are parsed into a cache; set
+`AIDA_DATA_KEEP_RAW=1` to keep them.
+
 ## Usage
 
 <details>
@@ -26,9 +48,9 @@ ds = load("glove-100-angular", pipeline, load_queries=True)
 print(pipeline.named_steps["pca"].explained_variance_ratio_)
 ```
 
-Datasets are downloaded to `datasets/` (or `$AIDA_DATA_DIR`). Large datasets
-are parsed once into a zstd-compressed `<name>.parquet` cache next to the
-download. The raw download is then deleted, since it is not needed anymore;
+Datasets are downloaded to `<root>/dense` (see [Where the datasets are
+stored](#where-the-datasets-are-stored)). Large datasets are parsed once into a
+zstd-compressed `<name>.parquet` cache next to the download. The raw download is then deleted, since it is not needed anymore;
 set `AIDA_DATA_KEEP_RAW=1` to keep it. Downloads and caches are written to
 a temporary file with a unique name (`<name>.<random>.part` or
 `<name>.parquet.<random>.parquet.tmp`) and renamed once complete, so
@@ -92,8 +114,7 @@ g.n_nodes, g.n_edges, g.n_colors
 g = graph.load_edge_list("brexit", directed=True, remap_colors=True)
 ```
 
-Each graph is parsed once into `datasets/graphs/<name>.parquet` (or under
-`$AIDA_DATA_DIR`), a zstd-compressed adjacency list with one row per node
+Each graph is parsed once into `<root>/graphs/<name>.parquet`, a zstd-compressed adjacency list with one row per node
 (`nbrs`: sorted out-neighbors, `color`), roughly a tenth of the size of the
 TSV files. The TSV files are then deleted; set `AIDA_DATA_KEEP_RAW=1` to keep
 them, or call `graph.prune_raw(dry_run=False)` to remove the ones left over
@@ -135,8 +156,7 @@ reordered, deduplicated or normalized, and missing values stay NaN. The one
 exception is `ecg`, whose file has 46991 blank lines between runs of values:
 they are skipped, as `pyattimo.load_dataset("ecg")` does.
 
-Each series is parsed once into `datasets/timeseries/<name>.parquet` (or under
-`$AIDA_DATA_DIR`), a zstd-compressed float64 file, about the size of the
+Each series is parsed once into `<root>/timeseries/<name>.parquet`, a zstd-compressed float64 file, about the size of the
 gzipped text and roughly ten times faster to read than to parse. The raw files
 are then deleted; set `AIDA_DATA_KEEP_RAW=1` to keep them, or call
 `timeseries.prune_raw(dry_run=False)` to remove the ones left over, along with

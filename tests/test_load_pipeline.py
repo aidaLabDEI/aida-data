@@ -98,3 +98,14 @@ def test_pandas_output_is_converted_to_array():
     ds = load("tiny", pipeline)
     assert isinstance(ds.dataset, np.ndarray)
     assert isinstance(ds.queries, np.ndarray)
+
+
+def test_local_path_is_under_dense(tmp_path):
+    assert dense.local_path("tiny") == tmp_path / "dense" / "tiny.npz"
+
+
+def test_load_creates_nested_dense_dir(tmp_path, monkeypatch):
+    root = tmp_path / "cache" / "aida-data"
+    monkeypatch.setattr(dense, "DATASETS_DIR", root)
+    load("tiny")
+    assert (root / "dense").is_dir()

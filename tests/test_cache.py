@@ -106,12 +106,12 @@ def test_stale_temporaries(tmp_path):
 
 @pytest.mark.parametrize(
     "module, subdir",
-    [(dense, None), (graph, "graphs"), (timeseries, "timeseries")],
+    [(dense, "dense"), (graph, "graphs"), (timeseries, "timeseries")],
 )
 def test_prune_raw_sweeps_stale_temporaries(tmp_path, monkeypatch, module, subdir):
     monkeypatch.setattr(module, "DATASETS_DIR", tmp_path)
-    directory = tmp_path / subdir if subdir else tmp_path
-    directory.mkdir(exist_ok=True)
+    directory = tmp_path / subdir
+    directory.mkdir()
     stale = directory / "x.zip.abc.part"
     fresh = directory / "y.zip.def.part"
     stale_cache = directory / "z.parquet.ghi.parquet.tmp"
