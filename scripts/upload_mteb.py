@@ -12,7 +12,8 @@
 
 Uploads `<root>/dense/mteb/<task>/<model_slug>/*.parquet` to
 `<task>/<model_slug>/` in `_mteb._MTEB_HF_REPO`. Needs `HF_TOKEN` in the
-environment.
+environment. Refuses models without a tag in `dense._MODEL_TAGS`, and prints
+the line to add to `_mteb_names._HOSTED`, which gives the pair its alias.
 
 Usage (the script header points aida-data at this checkout):
 
@@ -26,7 +27,7 @@ import sys
 
 from huggingface_hub import HfApi
 
-from aida_data import _mteb
+from aida_data import _mteb, dense
 
 
 def main() -> None:
@@ -35,6 +36,11 @@ def main() -> None:
     args = parser.parse_args()
 
     task, model = _mteb.parse_name(args.name)
+    if model not in dense._MODEL_TAGS:
+        sys.exit(
+            f"model `{model}` has no tag: add one to `_MODEL_TAGS` in "
+            "src/aida_data/dense.py first"
+        )
     directory = _mteb.cache_dir(task, model)
     if not (directory / _mteb.CORPUS_FILE).exists():
         sys.exit(f"{directory / _mteb.CORPUS_FILE} is missing: build the cache first")
@@ -52,6 +58,12 @@ def main() -> None:
         commit_message=f"Add {task} / {model}",
     )
     print(f"uploaded {directory} to {_mteb._MTEB_HF_REPO}/{path_in_repo}")
+    if (task, model) not in _mteb._HOSTED:
+        alias = dense._default_alias(task, model)
+        print(
+            f"add this line to `_HOSTED` in src/aida_data/_mteb_names.py "
+            f"(alias `{alias}`):\n    (\"{task}\", \"{model}\"),"
+        )
 
 
 if __name__ == "__main__":
