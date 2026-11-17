@@ -118,6 +118,33 @@ local cache or a hosted copy is used, and are only accepted for `mteb:` names.
 ds = dense.load(name, batch_size=128, model_kwargs={"device": "cuda:1"})
 ```
 
+The hosted pairs also have short aliases, listed by
+`dense.available_datasets()` and accepted by `load` and `load_qrels`:
+
+| Alias                           | Task                 | Model                     |
+| ------------------------------- | -------------------- | ------------------------- |
+| `arxiv-clustering-p2p-qwen3-4b` | `ArxivClusteringP2P` | `Qwen/Qwen3-Embedding-4B` |
+| `scidocs-qwen3-4b`              | `SCIDOCS`            | `Qwen/Qwen3-Embedding-4B` |
+
+An alias is `<task_slug>-<model_tag>`: the task's CamelCase words and acronyms,
+lowercased and joined with `-` (`ArxivClusteringP2P` gives
+`arxiv-clustering-p2p`, with a few manual exceptions such as `nfcorpus`), then
+a short tag of the model from a fixed table (`qwen3-4b`, `qwen3-0.6b`,
+`minilm-l6`). Aliases are matched exactly, so they must be written in
+lowercase. An alias is only another name for its pair: it uses the same cache,
+the same hosted files and the same encoding options. Any pair can get an
+alias, hosted or not:
+
+```python
+ds = dense.load("scidocs-qwen3-4b")
+dense.resolve_name("scidocs-qwen3-4b")  # "mteb:SCIDOCS:Qwen/Qwen3-Embedding-4B"
+dense.register_alias("scidocs-minilm", "mteb:SCIDOCS:sentence-transformers/all-MiniLM-L6-v2")
+```
+
+`register_alias` raises `ValueError` if the alias is already a dataset or an
+alias (pass `force=True` to override), contains `:`, or if the target is not a
+full `mteb:<task>:<model>` name.
+
 The cache of a pair is `<root>/dense/mteb/<task>/<model_slug>/`, where
 `model_slug` is the model name with `/` replaced by `__`. It contains
 `corpus.parquet` (the vectors, with the `id` column for retrieval and the
@@ -127,7 +154,10 @@ retrieval, `queries.parquet` and `qrels.parquet`. The texts are not stored.
 
 Maintainers can build and publish caches with `scripts/build_mteb.py` (encodes
 a name into the local cache) and `scripts/upload_mteb.py` (uploads it to the
-hosted registry; needs `HF_TOKEN`), both run with `uv run`.
+hosted registry; needs `HF_TOKEN`), both run with `uv run`. The upload
+script refuses models without a tag in `dense._MODEL_TAGS` and prints the line
+to add to `_HOSTED` in `src/aida_data/_mteb_names.py`, which gives the new pair
+its alias.
 
 </details>
 

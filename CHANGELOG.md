@@ -7,11 +7,13 @@
 - *(dense)* Load `mteb:<task>:<model>` names, from the local cache, the hosted registry or a local encode
 - *(dense)* Add `load_qrels` for MTEB retrieval datasets
 - Add the optional `mteb` extra
+- *(dense)* Short aliases for MTEB datasets (e.g. `scidocs-qwen3-4b`), with `register_alias` and `resolve_name`
 
 ### 📚 Documentation
 
 - Plans for MTEB dense datasets
 - Document MTEB embeddings in the readme
+- Plan and readme for the MTEB aliases
 
 ### ⚙️ Miscellaneous Tasks
 

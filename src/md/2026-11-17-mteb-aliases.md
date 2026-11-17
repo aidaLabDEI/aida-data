@@ -1,5 +1,7 @@
 # Plan: short aliases for MTEB dense datasets
 
+Implemented, see the summary at the end.
+
 Follow-up to `2026-11-17-mteb-dense-datasets.md`, which must be implemented
 first.
 
@@ -136,3 +138,24 @@ All of it lives in `dense.py`, next to `_DATASETS_INFO`.
 - Generating `_HOSTED` from the HF repo listing instead of keeping it static.
   That needs network access at import time or a cached index, which is
   rejected in §3.5 for now.
+
+## 8. Summary
+
+Implemented on branch `feat/mteb-dense` as planned, with these differences:
+
+- `PREFIX`, `parse_name`, `model_slug` and `_HOSTED` moved to a new module,
+  `_mteb_names.py`, with no dependencies. `_mteb` re-exports them, so
+  `_mteb._HOSTED` and `_mteb.parse_name` still work. The reason is that
+  `_mteb` imports `dense` at module level. If `dense` read `_HOSTED` and
+  called `parse_name` from `_mteb` while being imported, it would fail
+  whenever `_mteb` was imported first, as `scripts/upload_mteb.py` does. A
+  test runs both import orders.
+- `task_slug` and `model_tag` are private (`_task_slug`, `_model_tag`, and
+  `_default_alias` for the pair). Overrides in `_TASK_SLUGS`: `ArguAna`,
+  `DBPedia`, `FiQA2018`, `NFCorpus`, `SciFact`. The CamelCase rule would
+  split all five, for example `nf-corpus`.
+- `load` looks up unknown names in `_DATASETS_INFO` directly, after
+  `resolve_name`. Its `KeyError` lists `available_datasets()`, so aliases
+  are included.
+- `available_datasets()` is now sorted (registered names, then aliases). It
+  used to follow registration order.

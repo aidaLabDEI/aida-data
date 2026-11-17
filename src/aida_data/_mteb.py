@@ -34,7 +34,7 @@ _LOGGER = logging.getLogger("aida_data.mteb")
 # Label of the texts that do not belong to a clustering set.
 ABSENT = "<absent>"
 
-_MTEB_HF_REPO = "<lab-org>/aida-data-mteb"  # TODO: real name
+_MTEB_HF_REPO = "aidaLabDEI/aida-data"
 _MTEB_HF_BASE = f"https://huggingface.co/datasets/{_MTEB_HF_REPO}/resolve/main/"
 
 CORPUS_FILE = "corpus.parquet"
