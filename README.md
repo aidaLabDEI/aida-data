@@ -18,7 +18,7 @@ in the cache directory. Each module has its own subdirectory:
 
 ```
 <root>/
-  dense/        dense datasets
+  dense/        dense datasets (MTEB embeddings in dense/mteb/)
   graphs/       graphs
   timeseries/   time series
 ```
@@ -65,6 +65,69 @@ from aida_data import dense
 dense.prune_raw()               # dry run: list the raw files that can go
 dense.prune_raw(dry_run=False)  # delete them
 ```
+
+</details>
+
+<details>
+<summary>MTEB embeddings.</summary>
+
+Any text-only MTEB Retrieval or Clustering task, encoded with any MTEB model,
+loads through `dense.load` as `mteb:<task>:<model>`. The `default`
+subset (or the first one, if there is no `default`) and the first evaluation
+split of the task are used. The distance is the model's MTEB similarity
+(`cosine`, `euclidean` or `dot`; multi-vector models are not supported).
+
+```python
+from aida_data import dense
+
+# Retrieval: the corpus is ds.dataset, the queries are ds.queries
+name = "mteb:SCIDOCS:sentence-transformers/all-MiniLM-L6-v2"
+ds = dense.load(name)
+ds.ids         # (n,) object array of corpus ids, aligned with ds.dataset
+ds.query_ids   # (q,) object array of query ids, aligned with ds.queries
+qrels = dense.load_qrels(name)  # {query_id: {doc_id: score}}, positive scores only
+
+# Clustering: the unique texts are ds.dataset, one color per clustering set
+ds = dense.load("mteb:ArxivClusteringP2P:sentence-transformers/all-MiniLM-L6-v2")
+ds.colors.names        # ("set0", "set1", ...)
+ds.colors.labels[0]    # ("<absent>", "astro-ph", ...)
+# Texts that belong to set0 (the ones not labeled "<absent>")
+in_set0 = ds.colors.column("set0") != ds.colors.labels[0].index("<absent>")
+```
+
+The pair is looked up in the local cache first, then in the hosted registry on
+the Hugging Face Hub, and only if neither has it the task is encoded locally,
+which needs the `mteb` extra (`pip install aida-data[mteb]`) and can take a
+long time for large models. Downloading a hosted copy does not need the extra.
+A failed connection to the registry raises an error instead of starting a
+local encode. Local encodes are cached but never uploaded.
+
+`ids`, `query_ids` and `colors` stay aligned with the rows through the usual
+processing. Deduplication ignores the ids: of several identical vectors (with
+equal colors, for clustering) only the first id is kept; pass
+`deduplicate=False` to keep all of them. Texts that are absent from a
+clustering set get the label `"<absent>"` in that set's color.
+
+`load` and `load_qrels` accept encoding options, forwarded to the local
+encoder: `batch_size` (default 64), `model_kwargs` (passed to `mteb.get_model`,
+e.g. `{"device": "cuda:1"}`) and `limit` (for testing: encodes only the first
+rows and does not write the cache). They are ignored, with a warning, if the
+local cache or a hosted copy is used, and are only accepted for `mteb:` names.
+
+```python
+ds = dense.load(name, batch_size=128, model_kwargs={"device": "cuda:1"})
+```
+
+The cache of a pair is `<root>/dense/mteb/<task>/<model_slug>/`, where
+`model_slug` is the model name with `/` replaced by `__`. It contains
+`corpus.parquet` (the vectors, with the `id` column for retrieval and the
+`color*` columns for clustering, plus the task, model, revision and similarity
+as metadata; written last, so its presence marks a complete cache) and, for
+retrieval, `queries.parquet` and `qrels.parquet`. The texts are not stored.
+
+Maintainers can build and publish caches with `scripts/build_mteb.py` (encodes
+a name into the local cache) and `scripts/upload_mteb.py` (uploads it to the
+hosted registry; needs `HF_TOKEN`), both run with `uv run`.
 
 </details>
 

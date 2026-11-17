@@ -1,3 +1,22 @@
+## [Unreleased]
+
+### 🚀 Features
+
+- *(dense)* Optional row ids (`Dataset.ids`, `Dataset.query_ids`) stored in the parquet cache
+- *(mteb)* Encode MTEB Retrieval and Clustering tasks into the dense parquet cache
+- *(dense)* Load `mteb:<task>:<model>` names, from the local cache, the hosted registry or a local encode
+- *(dense)* Add `load_qrels` for MTEB retrieval datasets
+- Add the optional `mteb` extra
+
+### 📚 Documentation
+
+- Plans for MTEB dense datasets
+- Document MTEB embeddings in the readme
+
+### ⚙️ Miscellaneous Tasks
+
+- Add maintainer scripts to build and upload MTEB caches, and network tests
+
 ## [0.1.0] - 2026-10-10
 
 ### 🚀 Features
