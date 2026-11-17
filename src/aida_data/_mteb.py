@@ -26,11 +26,10 @@ import pyarrow as pa
 
 from . import _download, dense
 from ._cache import write_table
+from ._mteb_names import _HOSTED, PREFIX, model_slug, parse_name  # noqa: F401
 from .dense import Colors, _write_parquet_cache
 
 _LOGGER = logging.getLogger("aida_data.mteb")
-
-PREFIX = "mteb:"
 
 # Label of the texts that do not belong to a clustering set.
 ABSENT = "<absent>"
@@ -51,34 +50,6 @@ _INSTALL_HINT = "pip install aida-data[mteb]"
 # --------------------------------------------------------------------------
 # Names and paths
 # --------------------------------------------------------------------------
-
-
-def parse_name(name: str) -> tuple[str, str]:
-    """Split `mteb:<task>:<model>` into `(task, model)`.
-
-    The name is split on the first two `:`. Model names contain `/` but
-    never `:`. Raises `ValueError` for a missing prefix, an empty task or
-    model, an extra `:`, or parts that would escape the cache directory
-    (`..`, empty path components).
-    """
-    if not name.startswith(PREFIX):
-        raise ValueError(f"`{name}` is not an MTEB name, expected `mteb:<task>:<model>`")
-    parts = name[len(PREFIX) :].split(":")
-    if len(parts) != 2:
-        raise ValueError(f"`{name}` must have the form `mteb:<task>:<model>`")
-    task, model = parts
-    if not task or not model:
-        raise ValueError(f"`{name}`: task and model must not be empty")
-    if "/" in task or "\\" in task or task in (".", ".."):
-        raise ValueError(f"`{name}`: invalid task name `{task}`")
-    if any(p in ("", ".", "..") for p in model.split("/")) or "\\" in model:
-        raise ValueError(f"`{name}`: invalid model name `{model}`")
-    return task, model
-
-
-def model_slug(model: str) -> str:
-    """Directory name of `model`: `/` replaced by `__`."""
-    return model.replace("/", "__")
 
 
 def cache_dir(task: str, model: str) -> Path:

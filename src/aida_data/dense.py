@@ -12,6 +12,7 @@ zstd-compressed parquet next to the raw download.
 import io
 import json
 import logging
+import re
 import tarfile
 import zipfile
 from dataclasses import dataclass, replace
@@ -26,6 +27,7 @@ import pandas as pd
 import pyarrow as pa
 from sklearn.base import BaseEstimator, TransformerMixin
 
+from . import _mteb_names
 from ._cache import KEEP_RAW, delete_raw, read_table, write_table
 from ._download import download as _download
 from ._paths import datasets_dir
@@ -797,7 +799,93 @@ _DATASETS_INFO: dict[str, DatasetInfo] = {}
 def register(info: DatasetInfo, force=False):
     if info.name in _DATASETS_INFO and not force:
         raise ValueError(f"dataset {info.name} already registered")
+    if info.name in _ALIASES and not force:
+        raise ValueError(f"{info.name} is already an alias of {_ALIASES[info.name]}")
     _DATASETS_INFO[info.name] = info
+
+
+# --------------------------------------------------------------------------
+# Aliases: short names for `mteb:<task>:<model>` names
+# --------------------------------------------------------------------------
+
+# alias -> canonical `mteb:<task>:<model>` name
+_ALIASES: dict[str, str] = {}
+
+# Short tags of the models, for the aliases `<task_slug>-<model_tag>`. Model
+# names are too irregular to abbreviate automatically.
+_MODEL_TAGS: dict[str, str] = {
+    "Qwen/Qwen3-Embedding-4B": "qwen3-4b",
+    "Qwen/Qwen3-Embedding-0.6B": "qwen3-0.6b",
+    "sentence-transformers/all-MiniLM-L6-v2": "minilm-l6",
+}
+
+# Task slugs for which the CamelCase rule of `_task_slug` gives an ugly result.
+_TASK_SLUGS: dict[str, str] = {
+    "ArguAna": "arguana",
+    "DBPedia": "dbpedia",
+    "FiQA2018": "fiqa2018",
+    "NFCorpus": "nfcorpus",
+    "SciFact": "scifact",
+}
+
+# A word of a task name: an acronym (uppercase letters and digits not followed
+# by a lowercase letter, e.g. `SCIDOCS`, `P2P`, the `NF` of `NFCorpus`) or a
+# capitalized word (e.g. `Arxiv`, `Banking77`).
+_WORD_RE = re.compile(r"[A-Z0-9]+(?![a-z])|[A-Z0-9]?[a-z0-9]+")
+
+
+def _task_slug(task: str) -> str:
+    """Slug of an MTEB task name: its CamelCase words and acronyms,
+    lowercased and joined with `-` (`ArxivClusteringP2P` gives
+    `arxiv-clustering-p2p`), unless `_TASK_SLUGS` overrides it."""
+    if task in _TASK_SLUGS:
+        return _TASK_SLUGS[task]
+    return "-".join(w.lower() for w in _WORD_RE.findall(task))
+
+
+def _model_tag(model: str) -> str:
+    """Tag of `model` in `_MODEL_TAGS`; `KeyError` if it has none."""
+    try:
+        return _MODEL_TAGS[model]
+    except KeyError:
+        raise KeyError(
+            f"model `{model}` has no tag: add one to `aida_data.dense._MODEL_TAGS`"
+        ) from None
+
+
+def _default_alias(task: str, model: str) -> str:
+    return f"{_task_slug(task)}-{_model_tag(model)}"
+
+
+def register_alias(alias: str, target: str, force: bool = False) -> None:
+    """Make `alias` another name for the MTEB dataset `target`
+    (`mteb:<task>:<model>`), in `load`, `load_qrels` and
+    `available_datasets`. The alias shares the cache, the hosted files and
+    the `encode_kwargs` of its target; nothing is stored under its name.
+
+    Raises `ValueError` if `target` is not a valid `mteb:` name (so aliases
+    of aliases are not allowed), if `alias` starts with `mteb:` or contains
+    `:`, or if `alias` is already a registered dataset or an alias, unless
+    `force=True`.
+    """
+    _mteb_names.parse_name(target)
+    if alias.startswith(_mteb_names.PREFIX) or ":" in alias:
+        raise ValueError(f"alias `{alias}` must not contain `:`")
+    if not alias:
+        raise ValueError("alias must not be empty")
+    if not force:
+        if alias in _DATASETS_INFO:
+            raise ValueError(f"{alias} is already a registered dataset")
+        if alias in _ALIASES:
+            raise ValueError(f"{alias} is already an alias of {_ALIASES[alias]}")
+    _ALIASES[alias] = target
+
+
+def resolve_name(name: str) -> str:
+    """The canonical name of `name`: the target of an alias, else `name`
+    itself. E.g. `resolve_name("scidocs-qwen3-4b")` gives
+    `"mteb:SCIDOCS:Qwen/Qwen3-Embedding-4B"`."""
+    return _ALIASES.get(name, name)
 
 
 register(
@@ -1148,7 +1236,10 @@ register(
 
 
 def available_datasets():
-    return list(_DATASETS_INFO.keys())
+    """Names accepted by `load`: the registered datasets, then the aliases of
+    MTEB datasets (see `register_alias`), each group sorted. Full
+    `mteb:<task>:<model>` names are accepted too but not listed."""
+    return sorted(_DATASETS_INFO) + sorted(_ALIASES)
 
 
 def _safe_l2_normalize_rows(data: np.ndarray, label: str) -> np.ndarray:
@@ -1291,7 +1382,8 @@ def load(
     `name` is a registered dataset (see `available_datasets`) or an MTEB
     embedding, `mteb:<task>:<model>` (e.g.
     `mteb:SCIDOCS:sentence-transformers/all-MiniLM-L6-v2`), for Retrieval and
-    Clustering tasks. The cache in `<root>/dense/mteb` is used if present,
+    Clustering tasks, or an alias of one (e.g. `scidocs-qwen3-4b`, see
+    `register_alias` and `resolve_name`). The cache in `<root>/dense/mteb` is used if present,
     else the pair is downloaded from the hosted registry, else it is encoded
     locally (needs the `mteb` extra) and cached. Retrieval: the corpus is
     `dataset` (with `ids`), the queries are `queries` (with `query_ids`); the
@@ -1354,6 +1446,7 @@ def load(
         )
         ds = load("glove-100-angular", pipeline)
     """
+    name = resolve_name(name)
     if name.startswith("mteb:"):
         result = _mteb_result(name, encode_kwargs)
         return _process(
@@ -1372,7 +1465,7 @@ def load(
             f"unexpected arguments {sorted(encode_kwargs)}: they are only "
             "accepted for `mteb:` names"
         )
-    if name not in available_datasets():
+    if name not in _DATASETS_INFO:
         raise KeyError(
             f"Dataset `{name}` not available. Pick one of {available_datasets()}"
         )
@@ -1447,9 +1540,10 @@ def _read_mteb_cache(directory: Path):
 def load_qrels(name: str, **encode_kwargs) -> dict[str, dict[str, int]]:
     """Relevance judgments `{query_id: {doc_id: score}}` (positive scores
     only, original MTEB ids) of the MTEB retrieval dataset `name`
-    (`mteb:<task>:<model>`). Makes sure the cache exists like `load`, with
-    the same `encode_kwargs`. Raises `ValueError` for other names and for
-    clustering tasks."""
+    (`mteb:<task>:<model>`, or an alias of one). Makes sure the cache exists
+    like `load`, with the same `encode_kwargs`. Raises `ValueError` for other
+    names and for clustering tasks."""
+    name = resolve_name(name)
     if not name.startswith("mteb:"):
         raise ValueError(f"`{name}` is not an MTEB name, expected `mteb:<task>:<model>`")
     result = _mteb_result(name, encode_kwargs)
@@ -1558,3 +1652,10 @@ def _apply_transform(transform: Callable, data: np.ndarray, label: str) -> np.nd
             f"({data.shape[0]} -> {out.shape[0]}); transformers must not drop rows"
         )
     return out
+
+
+# Built-in aliases of the hosted MTEB pairs. Offline: only the static list is
+# read.
+for _task, _model in _mteb_names._HOSTED:
+    register_alias(_default_alias(_task, _model), f"mteb:{_task}:{_model}")
+del _task, _model
