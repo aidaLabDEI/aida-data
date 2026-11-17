@@ -1284,8 +1284,26 @@ def load(
     name: str,
     pipeline: TransformerMixin | None = None,
     deduplicate: bool = True,
+    **encode_kwargs,
 ) -> Dataset:
     """Load dataset `name`, optionally transforming it with `pipeline`.
+
+    `name` is a registered dataset (see `available_datasets`) or an MTEB
+    embedding, `mteb:<task>:<model>` (e.g.
+    `mteb:SCIDOCS:sentence-transformers/all-MiniLM-L6-v2`), for Retrieval and
+    Clustering tasks. The cache in `<root>/dense/mteb` is used if present,
+    else the pair is downloaded from the hosted registry, else it is encoded
+    locally (needs the `mteb` extra) and cached. Retrieval: the corpus is
+    `dataset` (with `ids`), the queries are `queries` (with `query_ids`); the
+    relevance judgments are in `load_qrels`. Clustering: the unique texts are
+    `dataset`, with one color per clustering set (absent texts are labeled
+    `"<absent>"`). The distance is the one of the model.
+
+    `encode_kwargs` (`batch_size`, `model_kwargs`, `limit`) are forwarded to
+    the local encoder, for `mteb:` names only (any for other names raises
+    `TypeError`). They are ignored, with a warning, if the cache or the hosted
+    copy is used. With `limit` (for testing) only the first rows are encoded
+    and nothing is cached.
 
     Processing order:
 
@@ -1336,6 +1354,24 @@ def load(
         )
         ds = load("glove-100-angular", pipeline)
     """
+    if name.startswith("mteb:"):
+        result = _mteb_result(name, encode_kwargs)
+        return _process(
+            result.meta["similarity"],
+            result.corpus,
+            result.ids,
+            result.colors,
+            result.queries,
+            result.query_ids,
+            None,
+            pipeline,
+            deduplicate,
+        )
+    if encode_kwargs:
+        raise TypeError(
+            f"unexpected arguments {sorted(encode_kwargs)}: they are only "
+            "accepted for `mteb:` names"
+        )
     if name not in available_datasets():
         raise KeyError(
             f"Dataset `{name}` not available. Pick one of {available_datasets()}"
@@ -1361,6 +1397,72 @@ def load(
     return _process(
         distance, train, ids, colors, test, query_ids, distances, pipeline, deduplicate
     )
+
+
+def _mteb_result(name: str, encode_kwargs: dict):
+    """The `_mteb.Encoded` of the MTEB name `name`: read from the local
+    cache, else from the hosted registry, else encoded locally. With
+    `limit` in `encode_kwargs` nothing is cached and the encoded result is
+    returned directly."""
+    from . import _mteb  # lazy: `_mteb` imports this module
+
+    task, model = _mteb.parse_name(name)
+    directory = _mteb.cache_dir(task, model)
+    if not (directory / _mteb.CORPUS_FILE).exists():
+        if _mteb.fetch_hosted(task, model, directory):
+            _warn_unused(name, encode_kwargs, "the hosted copy")
+        else:
+            result = _mteb.encode_task(task, model, **encode_kwargs)
+            _mteb.check_revision(result.meta, model)
+            return result
+    else:
+        _warn_unused(name, encode_kwargs, "the local cache")
+    result = _read_mteb_cache(directory)
+    _mteb.check_revision(result.meta, model)
+    return result
+
+
+def _warn_unused(name: str, encode_kwargs: dict, source: str):
+    if encode_kwargs:
+        _LOGGER.warning(
+            "%s: encode arguments %s ignored, using %s",
+            name,
+            sorted(encode_kwargs),
+            source,
+        )
+
+
+def _read_mteb_cache(directory: Path):
+    from . import _mteb
+
+    train, colors, ids, meta = _read_parquet_cache_full(directory / _mteb.CORPUS_FILE)
+    test = query_ids = qrels = None
+    if (directory / _mteb.QUERIES_FILE).exists():
+        test, _, query_ids, _ = _read_parquet_cache_full(directory / _mteb.QUERIES_FILE)
+    if (directory / _mteb.QRELS_FILE).exists():
+        qrels, _ = read_table(directory / _mteb.QRELS_FILE, _mteb._QRELS_VERSION)
+    return _mteb.Encoded(train, ids, colors, test, query_ids, qrels, meta)
+
+
+def load_qrels(name: str, **encode_kwargs) -> dict[str, dict[str, int]]:
+    """Relevance judgments `{query_id: {doc_id: score}}` (positive scores
+    only, original MTEB ids) of the MTEB retrieval dataset `name`
+    (`mteb:<task>:<model>`). Makes sure the cache exists like `load`, with
+    the same `encode_kwargs`. Raises `ValueError` for other names and for
+    clustering tasks."""
+    if not name.startswith("mteb:"):
+        raise ValueError(f"`{name}` is not an MTEB name, expected `mteb:<task>:<model>`")
+    result = _mteb_result(name, encode_kwargs)
+    if result.qrels is None:
+        raise ValueError(f"`{name}` is not a retrieval task, it has no qrels")
+    out: dict[str, dict[str, int]] = {}
+    for q, d, score in zip(
+        result.qrels.column("query_id").to_pylist(),
+        result.qrels.column("doc_id").to_pylist(),
+        result.qrels.column("score").to_pylist(),
+    ):
+        out.setdefault(q, {})[d] = score
+    return out
 
 
 def _process(

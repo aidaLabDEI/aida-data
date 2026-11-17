@@ -550,3 +550,160 @@ def test_encode_task_limit_does_not_write(tmp_path, monkeypatch):
     result = _mteb.encode_task("T", "org/m", limit=2)
     assert result.corpus.shape == (2, 2) and result.queries.shape == (2, 2)
     assert not _mteb.cache_dir("T", "org/m").exists()
+
+
+# --- load / load_qrels flow
+
+NAME = "mteb:T:org/m"
+
+
+def _clustering_result():
+    texts, colors = _mteb.clustering_colors_v1([(["a", "b"], [0, 1]), (["b", "c"], [5, 5])])
+    return _mteb.Encoded(
+        np.array([[1, 0], [0, 2], [3, 3]], dtype=np.float32), None, colors,
+        None, None, None, _extra("Clustering"),
+    )
+
+
+@pytest.fixture
+def flow(tmp_path, monkeypatch):
+    """Data root in tmp_path, `fetch_hosted` and `encode_task` faked.
+    `calls` records them; `state["hosted"]` is the result written by the
+    fake fetch (None: 404), `state["encoded"]` the one returned by encode."""
+    monkeypatch.setattr(dense, "DATASETS_DIR", tmp_path)
+    calls = []
+    state = {"hosted": None, "encoded": _retrieval_result(), "error": None}
+
+    def fetch(task, model, dest):
+        calls.append("fetch")
+        if state["error"]:
+            raise state["error"]
+        if state["hosted"] is None:
+            return False
+        _mteb.write_cache(state["hosted"], dest)
+        return True
+
+    def encode(task, model, **kwargs):
+        calls.append(("encode", kwargs))
+        if "limit" not in kwargs:
+            _mteb.write_cache(state["encoded"], _mteb.cache_dir(task, model))
+        return state["encoded"]
+
+    monkeypatch.setattr(_mteb, "fetch_hosted", fetch)
+    monkeypatch.setattr(_mteb, "encode_task", encode)
+    return calls, state
+
+
+def test_load_local_hit_calls_neither(flow):
+    calls, _ = flow
+    _mteb.write_cache(_retrieval_result(), _mteb.cache_dir("T", "org/m"))
+    ds = dense.load(NAME)
+    assert calls == []
+    assert ds.distance == "cosine" and ds.distances is None
+    assert list(ds.ids) == ["d0", "d1", "d2"] and list(ds.query_ids) == ["q0", "q1"]
+    assert ds.dataset.shape == (3, 2) and ds.queries.shape == (2, 2)
+
+
+def test_load_hosted_hit_does_not_encode(flow):
+    calls, state = flow
+    state["hosted"] = _retrieval_result()
+    ds = dense.load(NAME)
+    assert calls == ["fetch"]
+    assert list(ds.ids) == ["d0", "d1", "d2"]
+
+
+def test_load_hosted_404_encodes(flow):
+    calls, _ = flow
+    ds = dense.load(NAME, batch_size=8)
+    assert calls == ["fetch", ("encode", {"batch_size": 8})]
+    assert list(ds.ids) == ["d0", "d1", "d2"]
+    # now cached
+    calls.clear()
+    dense.load(NAME)
+    assert calls == []
+
+
+def test_load_fetch_error_propagates(flow):
+    calls, state = flow
+    state["error"] = RuntimeError("boom")
+    with pytest.raises(RuntimeError, match="boom"):
+        dense.load(NAME)
+    assert calls == ["fetch"]
+
+
+def test_load_limit_writes_no_cache(flow):
+    calls, _ = flow
+    ds = dense.load(NAME, limit=2)
+    assert calls == ["fetch", ("encode", {"limit": 2})]
+    assert list(ds.ids) == ["d0", "d1", "d2"]
+    assert not _mteb.cache_dir("T", "org/m").exists()
+
+
+def test_load_unused_encode_kwargs_warn(flow, caplog):
+    _mteb.write_cache(_retrieval_result(), _mteb.cache_dir("T", "org/m"))
+    with caplog.at_level("WARNING"):
+        dense.load(NAME, batch_size=4)
+    assert "ignored" in caplog.text and "batch_size" in caplog.text
+
+
+def test_load_hosted_unused_encode_kwargs_warn(flow, caplog):
+    _, state = flow
+    state["hosted"] = _retrieval_result()
+    with caplog.at_level("WARNING"):
+        dense.load(NAME, batch_size=4)
+    assert "ignored" in caplog.text
+
+
+def test_load_registered_with_encode_kwargs_raises():
+    with pytest.raises(TypeError):
+        dense.load(dense.available_datasets()[0], batch_size=4)
+
+
+def test_load_pipeline_and_dedup_keep_ids_aligned(flow):
+    from sklearn.preprocessing import StandardScaler
+
+    result = _retrieval_result()
+    result.corpus[2] = result.corpus[0]  # d2 duplicates d0
+    _mteb.write_cache(result, _mteb.cache_dir("T", "org/m"))
+    ds = dense.load(NAME, StandardScaler())
+    assert list(ds.ids) == ["d0", "d1"] and ds.dataset.shape[0] == 2
+    assert list(ds.query_ids) == ["q0", "q1"]
+    ds = dense.load(NAME, deduplicate=False)
+    assert list(ds.ids) == ["d0", "d1", "d2"]
+
+
+def test_load_distance_from_metadata(flow):
+    result = _retrieval_result()
+    result.meta = {**result.meta, "similarity": "dot"}
+    _mteb.write_cache(result, _mteb.cache_dir("T", "org/m"))
+    assert dense.load(NAME).distance == "dot"
+
+
+def test_load_clustering(flow):
+    _mteb.write_cache(_clustering_result(), _mteb.cache_dir("T", "org/m"))
+    ds = dense.load(NAME)
+    assert ds.queries is None and ds.ids is None and ds.query_ids is None
+    assert ds.colors.names == ("set0", "set1")
+    assert "<absent>" in ds.colors.labels[1]
+
+
+def test_load_qrels_round_trip(flow):
+    qrels = dense.load_qrels(NAME)
+    assert qrels == {"q0": {"d1": 1}}  # the zero score is not stored
+
+
+def test_load_qrels_limit_uses_result(flow):
+    qrels = dense.load_qrels(NAME, limit=1)
+    assert qrels == {"q0": {"d1": 1}}
+    assert not _mteb.cache_dir("T", "org/m").exists()
+
+
+def test_load_qrels_clustering_raises(flow):
+    _mteb.write_cache(_clustering_result(), _mteb.cache_dir("T", "org/m"))
+    with pytest.raises(ValueError):
+        dense.load_qrels(NAME)
+
+
+def test_load_qrels_non_mteb_raises():
+    with pytest.raises(ValueError):
+        dense.load_qrels("glove-100-angular")
