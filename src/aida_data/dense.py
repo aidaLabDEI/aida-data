@@ -85,12 +85,20 @@ def _load_hdf5(path: Path):
         return hfp["train"][:], hfp["test"][:], hfp["distances"][:]
 
 
-def _write_parquet_cache(path: Path, data: np.ndarray, colors: Colors | None):
+def _write_parquet_cache(
+    path: Path,
+    data: np.ndarray,
+    colors: Colors | None,
+    ids: np.ndarray | None = None,
+    extra_meta: dict | None = None,
+):
     """Write `data` and `colors` to the parquet cache `path`.
 
     One row per point: float32 columns `x0..x{d-1}` for the features, then
-    `color0..color{c-1}` for the color codes. Column names are positional,
-    the color names and labels are in the `aida_data` schema metadata.
+    `color0..color{c-1}` for the color codes, then the string column `id`
+    if `ids` is given. Column names are positional, the color names and
+    labels are in the `aida_data` schema metadata, together with `has_ids`
+    and the (JSON serializable) entries of `extra_meta`.
     """
     columns = {f"x{j}": data[:, j] for j in range(data.shape[1])}
     meta = {
@@ -98,6 +106,7 @@ def _write_parquet_cache(path: Path, data: np.ndarray, colors: Colors | None):
         "n_features": data.shape[1],
         "color_names": None,
         "color_labels": None,
+        "has_ids": ids is not None,
     }
     if colors is not None:
         # Store codes in the narrowest integer type, they are widened back to
@@ -108,11 +117,22 @@ def _write_parquet_cache(path: Path, data: np.ndarray, colors: Colors | None):
         columns |= {f"color{j}": codes[:, j] for j in range(codes.shape[1])}
         meta["color_names"] = list(colors.names)
         meta["color_labels"] = [list(labels) for labels in colors.labels]
+    if ids is not None:
+        if len(ids) != data.shape[0]:
+            raise ValueError(f"{len(ids)} ids for {data.shape[0]} rows")
+        columns["id"] = pa.array([str(i) for i in ids], type=pa.string())
+    if extra_meta:
+        meta |= extra_meta
     write_table(path, pa.table(columns), meta)
 
 
-def _read_parquet_cache(path: Path) -> tuple[np.ndarray, Colors | None]:
-    """Read a cache written by `_write_parquet_cache`."""
+def _read_parquet_cache_full(
+    path: Path,
+) -> tuple[np.ndarray, Colors | None, np.ndarray | None, dict]:
+    """Read a cache written by `_write_parquet_cache` as
+    `(data, colors, ids, meta)`. `ids` is None if the cache has none (also
+    for caches written before ids existed); `meta` is the `aida_data`
+    metadata dict, with the entries of `extra_meta`."""
     table, meta = read_table(path, _CACHE_VERSION)
     # Fill preallocated arrays one column at a time, rather than with
     # `np.column_stack`, so that only one column is duplicated at a time.
@@ -120,7 +140,7 @@ def _read_parquet_cache(path: Path) -> tuple[np.ndarray, Colors | None]:
     for j in range(data.shape[1]):
         data[:, j] = table.column(f"x{j}").to_numpy()
     colors = None
-    if meta["color_names"] is not None:
+    if meta.get("color_names") is not None:
         values = np.empty((table.num_rows, len(meta["color_names"])), dtype=np.int64)
         for j in range(values.shape[1]):
             values[:, j] = table.column(f"color{j}").to_numpy()
@@ -129,7 +149,16 @@ def _read_parquet_cache(path: Path) -> tuple[np.ndarray, Colors | None]:
             tuple(meta["color_names"]),
             tuple(tuple(labels) for labels in meta["color_labels"]),
         )
+    ids = None
+    if meta.get("has_ids"):
+        ids = np.array(table.column("id").to_pylist(), dtype=object)
     del table
+    return data, colors, ids, meta
+
+
+def _read_parquet_cache(path: Path) -> tuple[np.ndarray, Colors | None]:
+    """Read a cache written by `_write_parquet_cache` as `(data, colors)`."""
+    data, colors, _, _ = _read_parquet_cache_full(path)
     return data, colors
 
 
@@ -1225,6 +1254,8 @@ def prune_raw(dry_run: bool = True) -> list[Path]:
         ):
             paths.append(path)
     paths += stale_temporaries(_dense_dir())
+    # MTEB caches live in `dense/mteb/<task>/<model>/`; they have no raw files.
+    paths += stale_temporaries(_dense_dir() / "mteb", recursive=True)
     total = sum(path.stat().st_size for path in paths)
     _LOGGER.info(
         "%s %d raw and stale temporary files (%.1f MiB): %s",
@@ -1245,6 +1276,8 @@ class Dataset:
     queries: np.ndarray | None = None
     distances: np.ndarray | None = None
     colors: Colors | None = None  # aligned with the rows of `dataset`
+    ids: np.ndarray | None = None  # aligned with the rows of `dataset`
+    query_ids: np.ndarray | None = None  # aligned with the rows of `queries`
 
 
 def load(
@@ -1272,6 +1305,12 @@ def load(
     the steps above. The pipeline only sees the features. Two rows are
     duplicates only if both their features and their colors are equal, so
     points with equal features but different colors are all kept.
+
+    `Dataset.ids` and `Dataset.query_ids`, when the dataset has them, are
+    kept aligned with `dataset` and `queries` through all the steps above.
+    Deduplication ignores the ids: of several rows with equal features and
+    colors only the first one is kept, with its id, even if the ids differ.
+    With `deduplicate=False` all of them are kept.
 
     `pipeline` can be any object exposing `fit_transform`/`transform`,
     typically an `sklearn.pipeline.Pipeline` or a single transformer. It is
@@ -1312,19 +1351,42 @@ def load(
         _download(url, local_name)
     train, test, distances, *rest = loader(local_name)
     colors: Colors | None = rest[0] if rest else None
+    # Only some datasets (e.g. MTEB ones) have ids for their rows.
+    ids: np.ndarray | None = None
+    query_ids: np.ndarray | None = None
     if colors is not None and colors.values.shape[0] != train.shape[0]:
         raise ValueError(
             f"{name}: {colors.values.shape[0]} color rows for {train.shape[0]} points"
         )
+    return _process(
+        distance, train, ids, colors, test, query_ids, distances, pipeline, deduplicate
+    )
+
+
+def _process(
+    distance: str,
+    train: np.ndarray,
+    ids: np.ndarray | None,
+    colors: Colors | None,
+    test: np.ndarray | None,
+    query_ids: np.ndarray | None,
+    distances: np.ndarray | None,
+    pipeline: TransformerMixin | None,
+    deduplicate: bool,
+) -> Dataset:
+    """The filtering and transformation steps of `load`, keeping `ids`
+    aligned with `train` and `colors`, and `query_ids` with `test`."""
     orig_n_train = train.shape[0]
     orig_n_test = test.shape[0] if test is not None else 0
     if deduplicate:
         # Remove duplicate rows (if any) from train set
-        train, colors = _take(train, colors, _unique_row_indices(train, colors))
+        train, ids, colors = _take(
+            _unique_row_indices(train, colors), train, ids, colors
+        )
     # Remove completely NaN and infinite values from train and test sets, don't substitute with numbers
-    train, colors = _take(train, colors, np.isfinite(train).all(axis=1))
+    train, ids, colors = _take(np.isfinite(train).all(axis=1), train, ids, colors)
     if test is not None:
-        test = test[np.isfinite(test).all(axis=1)]
+        test, query_ids, _ = _take(np.isfinite(test).all(axis=1), test, query_ids)
 
     if pipeline is not None:
         train = _apply_transform(pipeline.fit_transform, train, "train")
@@ -1333,15 +1395,17 @@ def load(
 
     if distance in ("angular", "cosine", "normalized"):
         # remove 0-rows
-        train, colors = _take(train, colors, ~((train == 0).all(axis=1)))
+        train, ids, colors = _take(~((train == 0).all(axis=1)), train, ids, colors)
         if test is not None:
-            test = test[~((test == 0).all(axis=1))]
+            test, query_ids, _ = _take(~((test == 0).all(axis=1)), test, query_ids)
 
     if deduplicate:
         # Remove duplicate rows that may have been (re)introduced by the pipeline
         # (e.g. PCA collapsing points, or normalization mapping collinear vectors
         # onto each other), regardless of the return path.
-        train, colors = _take(train, colors, _unique_row_indices(train, colors))
+        train, ids, colors = _take(
+            _unique_row_indices(train, colors), train, ids, colors
+        )
 
     # We return the distances only if the data has not been preprocessed
     # and no rows have been dropped.
@@ -1353,14 +1417,22 @@ def load(
         or test.shape[0] != orig_n_test
     ):
         distances = None
-    return Dataset(distance, train, test, distances, colors)
+    return Dataset(distance, train, test, distances, colors, ids, query_ids)
 
 
 def _take(
-    data: np.ndarray, colors: Colors | None, rows: np.ndarray
-) -> tuple[np.ndarray, Colors | None]:
-    """Select `rows` (indices or boolean mask) of `data` and of `colors`."""
-    return data[rows], (colors.take(rows) if colors is not None else None)
+    rows: np.ndarray,
+    data: np.ndarray,
+    ids: np.ndarray | None = None,
+    colors: Colors | None = None,
+) -> tuple[np.ndarray, np.ndarray | None, Colors | None]:
+    """Select `rows` (indices or boolean mask) of `data`, `ids` and `colors`
+    together; `ids` and `colors` may be None."""
+    return (
+        data[rows],
+        ids[rows] if ids is not None else None,
+        colors.take(rows) if colors is not None else None,
+    )
 
 
 def _unique_row_indices(data: np.ndarray, colors: Colors | None = None) -> np.ndarray:

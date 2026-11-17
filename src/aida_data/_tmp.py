@@ -49,15 +49,17 @@ def atomic_path(path: Path, suffix: str):
         raise
 
 
-def stale_temporaries(directory: Path) -> list[Path]:
-    """The temporary files in `directory` (not recursive) that were not
-    modified for more than `STALE_AFTER` seconds, left by killed processes."""
+def stale_temporaries(directory: Path, recursive: bool = False) -> list[Path]:
+    """The temporary files in `directory` (and below it, with
+    `recursive=True`) that were not modified for more than `STALE_AFTER`
+    seconds, left by killed processes."""
     if not directory.is_dir():
         return []
     cutoff = time.time() - STALE_AFTER
+    candidates = directory.rglob("*") if recursive else directory.iterdir()
     return sorted(
         path
-        for path in directory.iterdir()
+        for path in candidates
         if path.name.endswith(TEMPORARY_SUFFIXES)
         and path.is_file()
         and path.stat().st_mtime < cutoff
