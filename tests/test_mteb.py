@@ -707,3 +707,88 @@ def test_load_qrels_clustering_raises(flow):
 def test_load_qrels_non_mteb_raises():
     with pytest.raises(ValueError):
         dense.load_qrels("glove-100-angular")
+
+
+# --------------------------------------------------------------------------
+# Network tests (deselected by default: `pytest -m network`)
+# --------------------------------------------------------------------------
+
+_SMALL_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+_SMALL_RETRIEVAL = "NanoSciFactRetrieval"
+_SMALL_CLUSTERING = "TwentyNewsgroupsClustering"
+
+
+@pytest.mark.network
+def test_network_download_hosted_pair(tmp_path, monkeypatch):
+    if "<lab-org>" in _mteb._MTEB_HF_REPO:
+        pytest.skip("the hosted repo name is still a placeholder")
+    monkeypatch.setattr(dense, "DATASETS_DIR", tmp_path)
+    ds = dense.load(f"mteb:{_SMALL_RETRIEVAL}:{_SMALL_MODEL}")
+    assert ds.dataset.shape[0] == len(ds.ids)
+    assert ds.queries is not None and ds.queries.shape[1] == ds.dataset.shape[1]
+    assert _mteb.cache_dir(_SMALL_RETRIEVAL, _SMALL_MODEL).exists()
+
+
+@pytest.mark.network
+def test_network_encode_small_retrieval(tmp_path, monkeypatch):
+    pytest.importorskip("mteb")
+    monkeypatch.setattr(dense, "DATASETS_DIR", tmp_path)
+    monkeypatch.setattr(_mteb, "fetch_hosted", lambda *a: False)
+    name = f"mteb:{_SMALL_RETRIEVAL}:{_SMALL_MODEL}"
+    ds = dense.load(name, limit=20, model_kwargs={"device": "cpu"})
+    assert ds.dataset.shape == (20, 384) and ds.queries.shape[1] == 384
+    assert len(ds.ids) == 20 and len(ds.query_ids) == len(ds.queries)
+    assert ds.distance == "cosine"
+    assert np.isfinite(ds.dataset).all()
+    assert not _mteb.cache_dir(_SMALL_RETRIEVAL, _SMALL_MODEL).exists()  # limit: no cache
+
+
+@pytest.mark.network
+def test_network_encode_small_clustering(tmp_path, monkeypatch):
+    pytest.importorskip("mteb")
+    monkeypatch.setattr(dense, "DATASETS_DIR", tmp_path)
+    monkeypatch.setattr(_mteb, "fetch_hosted", lambda *a: False)
+    ds = dense.load(
+        f"mteb:{_SMALL_CLUSTERING}:{_SMALL_MODEL}", limit=30, model_kwargs={"device": "cpu"}
+    )
+    assert ds.dataset.shape == (30, 384)
+    assert ds.queries is None and ds.colors is not None
+    assert np.isfinite(ds.dataset).all()
+
+
+@pytest.mark.network
+def test_network_drift_against_mteb_dataloader():
+    """Our rows (`_loader`) give the same vectors as mteb's own (private)
+    `create_dataloader` on the same HF Dataset rows."""
+    mteb = pytest.importorskip("mteb")
+    from mteb._create_dataloaders import create_dataloader
+    from mteb.types import PromptType
+
+    task = mteb.get_task(_SMALL_RETRIEVAL)
+    task.load_data()
+    split = task.metadata.eval_splits[0]
+    subset, data = _mteb._first_subset_split(task, split)
+    corpus = data["corpus"].select(range(8))
+    queries = data["queries"].select(range(8))
+    model = mteb.get_model(_SMALL_MODEL, device="cpu")
+
+    def ours(rows, prompt_type):
+        return _mteb.encode(model, rows, task, split, subset, prompt_type, 4)
+
+    def theirs(ds, prompt_type):
+        loader = create_dataloader(ds, task_metadata=task.metadata,
+                                   prompt_type=prompt_type, batch_size=4)
+        return np.asarray(
+            model.encode(loader, task_metadata=task.metadata, hf_split=split,
+                         hf_subset=subset, prompt_type=prompt_type, show_progress_bar=False),
+            dtype=np.float32,
+        )
+
+    docs = _mteb.doc_rows(list(corpus["text"]), _mteb._column(corpus, "title"))
+    np.testing.assert_allclose(
+        ours(docs, PromptType.document), theirs(corpus, PromptType.document), atol=1e-4
+    )
+    qrows = _mteb.query_rows(list(queries["text"]), _mteb._column(queries, "instruction"))
+    np.testing.assert_allclose(
+        ours(qrows, PromptType.query), theirs(queries, PromptType.query), atol=1e-4
+    )

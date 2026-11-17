@@ -28,6 +28,10 @@ shuttle = [
 wfdb = [
     "wfdb>=4.3.1",
 ]
+mteb = [
+    "mteb>=2.27.14,<3",
+    "sentence-transformers>=6.3.0",
+]
 
 [build-system]
 requires = ["uv_build>=0.12.11,<0.13.0"]

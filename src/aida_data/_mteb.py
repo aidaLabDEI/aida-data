@@ -276,10 +276,12 @@ def text_rows(texts: Sequence[str]) -> list[dict]:
 def _loader(rows: list[dict], batch_size: int):
     """A `torch` DataLoader over `rows`. `default_collate` turns a list of
     `{str: str}` into `{str: list[str]}`, the batch format of MTEB's
-    `BatchedInput`."""
+    `BatchedInput`. The rows are wrapped in a HF `Dataset` because MTEB's
+    wrappers read `loader.dataset.features` to detect image/audio/video."""
+    from datasets import Dataset
     from torch.utils.data import DataLoader
 
-    return DataLoader(rows, batch_size=batch_size, shuffle=False)
+    return DataLoader(Dataset.from_list(rows), batch_size=batch_size, shuffle=False)
 
 
 def clustering_colors_v1(
