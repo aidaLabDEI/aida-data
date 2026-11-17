@@ -1,5 +1,7 @@
 # Plan: MTEB encodings as dense datasets
 
+Implemented, see the summary at the end.
+
 Goal: turn the standalone `build_encodings.py` into part of `aida_data.dense`.
 Any MTEB task can be encoded with any MTEB model and loaded with
 `dense.load`, with the same cleaning and pipeline as the other dense datasets.
@@ -301,3 +303,78 @@ Tests marked `network`:
   API.
 - The first batch of hosted (task, model) pairs to build and upload, for
   example `ArxivClusteringP2P` and `SCIDOCS` with `Qwen/Qwen3-Embedding-4B`.
+
+## 8. Summary
+
+Implemented on branch `feat/mteb-dense`, one commit per step:
+
+| commit | content |
+|---|---|
+| `0988079` | §4.2 items 1, 2, 4, 6: `Dataset.ids` / `query_ids`, `id` column and `extra_meta` in the parquet cache, ids kept aligned through the filters, recursive pruning of stale temporaries under `dense/mteb` |
+| `4ec048e` | §4.1, §4.1.1, §4.3, §4.5: new `src/aida_data/_mteb.py` |
+| `aeb609e` | §4.2 items 3, 5: `mteb:` names in `dense.load`, `dense.load_qrels` |
+| `28ae24c` | §4.4: `mteb` extra, `scripts/build_mteb.py`, `scripts/upload_mteb.py`, network tests; `build_encodings.py` removed |
+| `fa66d8e` | §6: README section "MTEB embeddings", CHANGELOG `[Unreleased]` entry |
+
+What was built:
+
+- `dense.py`:
+  - `_write_parquet_cache(path, data, colors, ids=None, extra_meta=None)`;
+  - new `_read_parquet_cache_full(path) -> (data, colors, ids, meta)`, which
+    `_read_parquet_cache` now wraps;
+  - `_take(rows, data, ids=None, colors=None)`;
+  - the filtering and pipeline steps of `load` moved into `_process(...)`,
+    shared by registered and MTEB datasets;
+  - `load(name, pipeline, deduplicate, **encode_kwargs)` calls
+    `_mteb_result` for `mteb:` names. That function returns an
+    `_mteb.Encoded` from the local cache, the hosted copy or a local encode.
+    With `limit`, the in-memory result is used and nothing is cached;
+  - `load_qrels(name, **encode_kwargs)`.
+- `_mteb.py`:
+  - `parse_name`, `model_slug`, `cache_dir`;
+  - `fetch_hosted`, `similarity_to_distance`, `check_revision`;
+  - the row builders `doc_rows`, `query_rows`, `text_rows`, plus `_loader`;
+  - `clustering_colors_v1`, `clustering_colors_v2`, `build_qrels`;
+  - `write_cache`, `encode`, `encode_task`, and the `Encoded` dataclass.
+- `_tmp.stale_temporaries(directory, recursive=False)`.
+
+Deviations from the plan and findings:
+
+- `fetch_hosted` tells a retrieval task from a clustering one by probing
+  `qrels.parquet` with a second `HEAD`, the second option of §4.1 item 3.
+  `corpus.parquet` stays the last file downloaded.
+- §4.1.1: the loader must wrap its rows in a HF `datasets.Dataset`, not a
+  plain list. MTEB's wrappers read `loader.dataset.features` to detect
+  image, audio and video inputs (`_setup_modality_collator`). The network
+  tests found this; the batch format is unchanged.
+- §4.3: in MTEB 2.x both clustering formats use the columns `sentences` /
+  `labels`, which the task exposes as `input_column_name` /
+  `label_column_name`. They are not `text` / `label`. The format is detected
+  from the data: if `sentences` holds lists, it is v1, with one row per set.
+  v2 texts are not deduplicated before encoding; `dense.load` deduplicates
+  them afterwards.
+- `parse_name` also rejects `..`, empty path components and a `/` in the
+  task, since both parts become cache paths and URLs.
+- `similarity_to_distance` also raises `NotImplementedError` for `manhattan`
+  and `custom`.
+- `qrels.parquet` carries the minimal metadata `{"version": 1}`.
+- `mteb` 2.27.14 requires Python `>=3.11,<3.15`, so the repo's `>=3.12`
+  works with it.
+
+Tests: `tests/test_mteb.py` (new). `uv run pytest` gives 231 passed
+(22 network tests deselected). With the `mteb` extra installed,
+`uv run pytest -m network tests/test_mteb.py` gives 3 passed and 1 skipped:
+- the encode tests use `NanoSciFactRetrieval` and
+  `TwentyNewsgroupsClustering` with `all-MiniLM-L6-v2` on CPU and `limit`;
+- the drift check against MTEB's private `create_dataloader` passes with
+  `atol=1e-4`;
+- the hosted-download test is skipped while `_MTEB_HF_REPO` is a
+  placeholder.
+
+Still open:
+
+- `_MTEB_HF_REPO` is still the placeholder `<lab-org>/aida-data-mteb`.
+- No pair has been built or uploaded yet (§7).
+- `load_qrels` also reads the corpus vectors. Reading `qrels.parquet` alone
+  would be cheaper for large corpora.
+- The items of §7 remain open.
