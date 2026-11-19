@@ -1,3 +1,8 @@
+## [0.3.1]
+
+### 🚀 Features
+
+- *(dense)* Add a couple of hosted datasets
 ## [0.3.0] - 2026-11-17
 
 ### 🚀 Features
@@ -13,6 +18,10 @@
 - Document MTEB embeddings in the readme and changelog
 - Mark the MTEB dense datasets plan as implemented
 - Document MTEB aliases and mark the plan as implemented
+
+### ⚙️ Miscellaneous Tasks
+
+- Update changelog
 
 ### 💼 Other
 

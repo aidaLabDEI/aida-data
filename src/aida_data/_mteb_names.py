@@ -13,6 +13,8 @@ PREFIX = "mteb:"
 _HOSTED: list[tuple[str, str]] = [
     ("ArxivClusteringP2P", "Qwen/Qwen3-Embedding-4B"),
     ("SCIDOCS", "Qwen/Qwen3-Embedding-4B"),
+    ("RedditClusteringP2P", "Qwen/Qwen3-Embedding-4B"),
+    ("MSMARCO", "Qwen/Qwen3-Embedding-4B"),
 ]
 
 
