@@ -34,7 +34,7 @@ DATASETS_DIR = datasets_dir()
 
 _LOGGER = logging.getLogger("aida_data.graph")
 
-# Layout version of the parquet caches written by `_cached`.
+# Layout version of the parquet caches written by `_ensure_cache`.
 _CACHE_VERSION = 1
 
 # Largest edge count whose adjacency list is stored with int32 offsets
@@ -150,7 +150,7 @@ def load_edge_list(
     Processing:
 
     1. the raw files are downloaded (if needed) and loaded, once: the result
-       is kept in a parquet cache (see `_cached`);
+       is kept in a parquet cache (see `_ensure_cache`);
     2. `colors[v]` is the color of node `v`, for `v` in `0..n-1`, where `n` is
        one plus the largest node id in the edges or in the labels. Nodes
        without a color get `-1` (and a warning is logged). If
@@ -171,7 +171,7 @@ def load_edge_list(
             f"Dataset `{name}` not available. Pick one of {available_datasets()}"
         )
 
-    edges, colors = _cached(name)
+    edges, colors = _read_parquet_cache(_ensure_cache(name))
     if not directed:
         edges = _to_undirected(name, edges)
     if remap_colors:
@@ -308,13 +308,13 @@ def _read_parquet_cache(path: Path) -> tuple[np.ndarray, np.ndarray]:
     return edges, colors
 
 
-def _cached(name: str) -> tuple[np.ndarray, np.ndarray]:
-    """Return `(edges, colors)` of dataset `name`, parsing it only once.
+def _ensure_cache(name: str) -> Path:
+    """Make the parquet cache of dataset `name` if missing and return its path.
 
     The first call downloads the raw files, parses them with the loader of the
-    dataset and stores the result in `cache_path(name)`; later calls only read
-    that file. The cache does not depend on the options of `load_edge_list`:
-    it holds the edges with self loops and duplicates removed, in the source
+    dataset and stores the result in `cache_path(name)`; later calls do
+    nothing. The cache is not read back. It does not depend on the options
+    of `load_edge_list`: it holds the edges with self loops and duplicates removed, in the source
     orientation, and the colors as in the labels file (`-1` if missing).
 
     After a fresh parse the raw files are deleted, unless `KEEP_RAW` is set.
@@ -335,9 +335,7 @@ def _cached(name: str) -> tuple[np.ndarray, np.ndarray]:
         # Only after a fresh parse: upgrading alone never removes files.
         if not KEEP_RAW:
             delete_raw(edges_path, colors_path)
-    # Always read back from the file, so that the first and later calls
-    # return identical arrays.
-    return _read_parquet_cache(cache)
+    return cache
 
 
 def prune_raw(dry_run: bool = True) -> list[Path]:

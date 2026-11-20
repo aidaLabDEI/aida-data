@@ -33,7 +33,7 @@ DATASETS_DIR = datasets_dir()
 
 _LOGGER = logging.getLogger("aida_data.timeseries")
 
-# Layout version of the parquet caches written by `_cached`.
+# Layout version of the parquet caches written by `_ensure_cache`.
 _CACHE_VERSION = 1
 
 # What a loader returns: the (n, d) values, the d dimension names (or None)
@@ -406,7 +406,7 @@ def load(name: str) -> TimeSeries:
     """Load time series dataset `name` as a `TimeSeries`.
 
     The raw files are downloaded (if needed) and parsed once: the result is
-    kept in a parquet cache (see `_cached`). `values` is an `(n, d)` float64
+    kept in a parquet cache (see `_ensure_cache`). `values` is an `(n, d)` float64
     array, with `d = 1` for univariate series, in the order of the source.
 
     Example::
@@ -416,7 +416,7 @@ def load(name: str) -> TimeSeries:
         ts.univariate    # (n,)
     """
     _check_name(name)
-    return TimeSeries(name, *_cached(name))
+    return TimeSeries(name, *_read_parquet_cache(_ensure_cache(name)))
 
 
 def _write_parquet_cache(
@@ -461,13 +461,12 @@ def _read_parquet_cache(path: Path) -> Cached:
     return values, dim_names, time
 
 
-def _cached(name: str) -> Cached:
-    """Return `(values, dim_names, time)` of dataset `name`, parsing it only
-    once.
+def _ensure_cache(name: str) -> Path:
+    """Make the parquet cache of dataset `name` if missing and return its path.
 
     The first call downloads the raw files, parses them with the loader of the
-    dataset and stores the result in `cache_path(name)`; later calls only read
-    that file.
+    dataset and stores the result in `cache_path(name)`; later calls do
+    nothing. The cache is not read back.
 
     After a fresh parse the raw files are deleted, unless `KEEP_RAW` is set or
     another dataset that is not cached yet needs them.
@@ -488,9 +487,7 @@ def _cached(name: str) -> Cached:
         # Only after a fresh parse: upgrading alone never removes files.
         if not KEEP_RAW:
             delete_raw(*(path for path in paths if not _needed_by_others(name, path)))
-    # Always read back from the file, so that the first and later calls
-    # return identical arrays.
-    return _read_parquet_cache(cache)
+    return cache
 
 
 def _validate(name: str, values, dim_names, time) -> Parsed:
