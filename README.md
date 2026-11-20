@@ -23,6 +23,11 @@ in the cache directory. Each module has its own subdirectory:
   timeseries/   time series
 ```
 
+Each of them also has an `hdf5/` subdirectory (`dense/hdf5/`, `graphs/hdf5/`,
+`timeseries/hdf5/`, and `dense/hdf5/mteb/<task>/` for MTEB) with the HDF5 files
+converted by [`aida-data export`](#command-line). They can be deleted with
+`aida-data prune-hdf5`.
+
 Raw downloads are deleted once they are parsed into a cache; set
 `AIDA_DATA_KEEP_RAW=1` to keep them.
 
@@ -257,3 +262,235 @@ stale `*.part`/`*.tmp` files
 (`timeseries.prune_raw()` is a dry run).
 
 </details>
+
+## Command line
+
+The `aida-data` command (also `python -m aida_data`) downloads a dataset into
+the cache and exposes it at a path, so that programs written in other
+languages (C++, Rust, Julia...) can read it without going through Python. The
+file is HDF5 by default, or parquet with `--format parquet`.
+
+```console
+$ aida-data export glove-100-angular ~/data/
+/home/u/data/glove-100-angular.hdf5 -> /home/u/.cache/aida-data/dense/glove-100-angular.hdf5
+
+$ aida-data export adult                          # converted, into the current directory
+/home/u/adult.hdf5 -> /home/u/.cache/aida-data/dense/hdf5/adult.hdf5
+
+$ aida-data export scidocs-qwen3-4b ./scidocs.h5  # link path given explicitly
+
+$ aida-data export scidocs-qwen3-4b --format parquet
+$ aida-data export timeseries/ecg --copy /scratch/  # a real copy, not a link
+
+$ aida-data path higgs --format parquet           # print the cached path, nothing else
+/home/u/.cache/aida-data/dense/higgs.parquet
+
+$ aida-data list --module graph --cached
+NAME     MODULE  NATIVE   PARQUET  HDF5
+brexit   graph   parquet  yes      no
+
+$ aida-data prune-hdf5          # dry run: list the converted files and their size
+$ aida-data prune-hdf5 --yes    # delete them
+
+$ aida-data snippet adult > load_adult.cpp   # C++ program that reads adult.hdf5
+```
+
+The commands:
+
+- `export NAME [DEST]` makes sure that the dataset is in the cache in the
+  requested format (downloading, parsing and converting if needed) and links
+  it at `DEST`. It prints `<link> -> <target>`, or just the path with `--copy`.
+- `path NAME` does the same without linking and prints the absolute path of
+  the cached file, so that `$(aida-data path glove-100-angular)` works in
+  shell scripts. Progress and log messages go to stderr.
+- `list [--module dense|graph|timeseries] [--cached]` prints one row per
+  dataset: its native format (`hdf5` for ann-benchmarks and VIBE files,
+  `parquet`, or `parquet-dir` for MTEB), and whether the parquet and HDF5
+  files are cached (`yes`, `no`, or `-` if the format is not available). It
+  never downloads or converts. MTEB aliases are listed, full `mteb:<task>:<model>`
+  names are not.
+- `prune-hdf5` lists the converted HDF5 files and their total size, and
+  deletes them (and stale temporary files) with `--yes`. It never touches the
+  HDF5 datasets that are downloaded as such.
+- `snippet NAME` prints C++ code, see [below](#c).
+
+`NAME` is a dataset name of any module (names are unique across modules, and
+an optional `module/` prefix such as `timeseries/ecg` is accepted), an MTEB
+alias, or a full `mteb:<task>:<model>` name. A name that is not found gets
+suggestions. An MTEB pair is only exposed if it is cached or hosted: `export`
+never encodes, so encode it first with `dense.load`.
+
+### Destination
+
+`DEST` works like the target of `ln -s`:
+
+- omitted: the link is created in the current directory;
+- an existing directory (or a symlink to one): the link is created inside it;
+- anything else: `DEST` is the path of the link. Its parent must exist.
+
+The name of the link is the dataset name plus the suffix of the format
+(`glove-100-angular.hdf5`, `pamap2.parquet`), not the name of the cached file.
+An MTEB pair exported as parquet is a directory, named after its alias
+(`scidocs-qwen3-4b/`), or `<task>__<model_slug>` if it has none.
+
+If something is already at the link path, `export` fails, unless you pass
+`--force`, which replaces a file or a symlink. It never replaces a directory,
+nor a link to the cached file itself. Links and copies are created atomically.
+
+| Option | Effect |
+| --- | --- |
+| `--format {hdf5,parquet}` | File to expose (default `hdf5`). The ann-benchmarks and VIBE datasets exist only as HDF5, so `--format parquet` is an error for them. |
+| `--force` | Replace an existing file or symlink. |
+| `--copy` | Copy instead of making a symlink (a directory is copied recursively). |
+| `--hardlink` | Make a hard link instead (one per file for a directory). It fails across filesystems: use `--copy`. |
+| `-q`, `--quiet` | Only warnings and errors, no progress bars. |
+| `--debug` | Show the traceback of errors. |
+
+`-q` and `--debug` are accepted by every command. Exit codes: `0` on success,
+`1` on a runtime error (unknown name, existing destination, format not
+available, not enough disk space, network error), `2` on a usage error.
+Errors are printed on stderr as `aida-data: error: <message>`.
+
+Symlinks point into the cache, so they break if the cache is deleted or
+rebuilt, or if the converted file is removed with `prune-hdf5`. (The `prune_raw`
+functions never remove caches.) Use `--copy` to get a file that is independent
+of the cache.
+
+### HDF5 layouts
+
+Datasets are contiguous and uncompressed, so that a reader needs one `H5Dread`
+(or a memory map) and no filter plugins. Every matrix is row-major with one
+row per point. Every converted file has the root attributes
+`aida_data_hdf5_version`, `source_mtime_ns`, `module` and `name`. Converted
+files are rebuilt when the parquet cache they come from changes.
+
+Dense datasets. The ann-benchmarks and VIBE datasets are exposed as
+downloaded, with `train`, `test`, `neighbors`, `distances` and the attribute
+`distance`. The other datasets are converted to a compatible layout, so that
+tools that read `train`, `test` and `attrs["distance"]` work unchanged, but
+**they have no `neighbors` and `distances`**: aida-data does not compute
+ground truth for them.
+
+| Object | Shape and type | Present |
+| --- | --- | --- |
+| `train` | `(n, d)` float32 | always (for MTEB, the corpus) |
+| `test` | `(q, d)` float32 | MTEB retrieval (the queries) |
+| `colors` | `(n, c)` unsigned integers | colored datasets |
+| `ids` | `(n,)` string | MTEB |
+| `test_ids` | `(q,)` string | MTEB retrieval |
+| `qrels/query`, `qrels/doc` | `(r,)` string | MTEB retrieval |
+| `qrels/score` | `(r,)` int64 | MTEB retrieval |
+| attributes `distance`, `dimension` | string, integer | always |
+| attribute `color_names` | array of strings | colored datasets |
+| attribute `color_labels` | JSON string: a list with the list of labels of each color | colored datasets |
+
+Graphs, in CSR form. The out-neighbors of node `v` are
+`neighbors[offsets[v]:offsets[v+1]]`, sorted ascending. Like the parquet
+cache, the graph is the one that `load_edge_list` reads before its options
+are applied.
+
+| Object | Shape and type |
+| --- | --- |
+| `offsets` | `(n + 1,)` int64 |
+| `neighbors` | `(m,)` integers |
+| `colors` | `(n,)` integers, `-1` if missing |
+| attributes `n_nodes`, `n_edges` | integer |
+
+Time series.
+
+| Object | Shape and type | Present |
+| --- | --- | --- |
+| `values` | `(n, d)` float64, NaN for missing values | always |
+| `time` | `(n,)` int64, milliseconds since the Unix epoch | if the source has time stamps |
+| attribute `dim_names` | array of strings | if the source has names |
+| attributes `sampling`, `source` | string | if known |
+
+Integers are stored in the narrowest type that fits; HDF5 converts them when
+you read them as `int64`, which is what the C++ snippets do.
+
+### C++
+
+`aida-data snippet NAME` prints a complete C++17 program that opens the HDF5
+file of `NAME` with [H5Easy](https://github.com/highfive-devs/highfive), the
+one-call interface of the header-only HighFive library, loads every object of
+the file and prints their shapes. It is a starting point to copy and adapt.
+It never downloads or converts anything, so it works offline: if the HDF5
+file is not cached, the program checks with `file.exist` the objects that not
+every dataset of the module has; if it is, the program loads exactly what the
+file has, with its shapes in comments. `--file PATH` sets the path of the file
+in the code (default `NAME.hdf5`, the name that `export` gives it).
+
+```console
+$ aida-data export glove-100-angular && aida-data snippet glove-100-angular > load.cpp
+```
+
+```cpp
+#include <highfive/H5Easy.hpp>
+
+#include <cstdint>
+#include <iostream>
+#include <string>
+#include <vector>
+
+int main() {
+    H5Easy::File file("glove-100-angular.hdf5", H5Easy::File::ReadOnly);
+
+    // One row per point.
+    auto train = H5Easy::load<std::vector<std::vector<float>>>(file, "/train");
+
+    // Ids of the nearest neighbors of each query, in train.
+    auto neighbors = H5Easy::load<std::vector<std::vector<int64_t>>>(file, "/neighbors");
+
+    // Distance of the dataset, e.g. "euclidean" or "angular".
+    auto distance = H5Easy::loadAttribute<std::string>(file, "/", "distance");
+    // ...
+}
+```
+
+The output also has the loads of `test` and `distances`, and comments on how
+to read a large matrix into one contiguous buffer (`read_raw`, or an Eigen
+row-major matrix). Floats load as `float` (`double` for time series) and
+integers as `int64_t`.
+
+HighFive is a header-only library on top of the HDF5 library. The snippets
+target HighFive 3 (the header comment says which version was tested). Install
+it from a package manager (`apt install libhighfive-dev`, `conda install
+highfive`, `vcpkg install highfive`) or as a git submodule, then build with
+either of:
+
+```console
+$ h5c++ -std=c++17 -I/path/to/highfive/include load.cpp -o load
+```
+
+```cmake
+find_package(HighFive REQUIRED)
+target_link_libraries(load HighFive::HighFive)
+```
+
+With HighFive 2 the CMake target is `HighFive` and `DataSet::read_raw(T*)` is
+`DataSet::read(T*)`.
+
+### Parquet layouts
+
+With `--format parquet` you get the cache of the dataset, which is read with
+any parquet library. It has one column per feature, so wide embeddings have
+thousands of columns, and the color names are only in the file metadata. HDF5
+is easier to read outside Python.
+
+| Cache | Columns |
+| --- | --- |
+| dense | `x0..x{d-1}` (float32), then `color0..color{c-1}` (integer codes) for colored datasets, and `id` (string) if the dataset has ids. The color names and labels, the number of features and other metadata are in the `aida_data` key of the schema metadata, as JSON. |
+| graph | one row per node `v`: `nbrs` (list of out-neighbors, sorted) and `color` (integer, `-1` if missing) |
+| time series | one row per time step: `x0..x{d-1}` (float64), and `t` (timestamp, ms) if the source has time stamps |
+| MTEB | a directory: `corpus.parquet` (the dense layout, with `id` for retrieval and `color*` for clustering), and for retrieval `queries.parquet` (the dense layout, with `id`) and `qrels.parquet` (`query_id`, `doc_id`: strings, `score`: int64) |
+
+### Disk space
+
+Converted HDF5 files are uncompressed copies of the zstd-compressed parquet
+caches, and can be much larger: `higgs` takes about 1.2 GB, and the Qwen3-4B
+embeddings of a large corpus (8.8 million vectors of 2560 floats) about 90 GB.
+Before converting, `export` logs the expected size and fails if the
+filesystem has less than that plus 10% free, suggesting `--format parquet`.
+The converted files are kept so that they can be linked, and
+`aida-data prune-hdf5 --yes` frees the space (they are rebuilt on the next
+`export`).

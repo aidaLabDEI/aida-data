@@ -1,6 +1,6 @@
 # Plan: `aida-data export` command line tool
 
-Not implemented yet.
+Implemented, see the summary at the end.
 
 Goal: a command line tool that downloads a dataset into the usual cache
 (`<root>/dense`, `<root>/graphs`, `<root>/timeseries`, see `_paths.py`) and
@@ -624,3 +624,82 @@ rows.
 8. `feat(cli)`: `_snippets.py`, `snippet` subcommand, golden and `cpp`
    tests.
 9. `docs`: README, CHANGELOG, plan marked as implemented.
+
+## 8. Summary
+
+Implemented on `main` in nine commits, one per step of §7 (`19a2797` to the
+docs commit), as planned, with these differences:
+
+- **Step 1.** The cached loaders became `_parse_*` functions. The old
+  `_cached(path, cache_name, build)` is kept as `_write_cache` (parse, write,
+  delete raw, no read-back) plus a read, because tests use it directly.
+  Tests that called the old `_load_*` loaders now call the parsers. No
+  compatibility wrappers were kept.
+- **Step 2.** `cache_name` is set explicitly to the dataset name in each
+  registration, not filled in by `register`, since tests register fake
+  HDF5-like datasets with `cache_name=None`. `chem` reads `ethylene_CO.txt`
+  straight from the zip; `ht` extracts into a temporary directory. The
+  invariant test (a cache name or an `.hdf5` raw file) runs in a
+  subprocess, so that fake datasets registered by other tests don't leak
+  into it.
+- **Step 3.** As planned (`derived_from`, `derive`), with one more log
+  message, `deriving ... from ...`.
+- **Step 5.** `dense._ensure_mteb` (§3.4) was written in this step, because
+  the HDF5 conversion needs it; it raises `LookupError`.
+  `_hdf5.ensure_hdf5(module, name)` takes the module and name rather than
+  an `Entry`, which only exists from step 6, and `export.ensure` wraps it.
+  `_hdf5` also has `hdf5_path` and `is_fresh` (no I/O), used by `export`
+  and `snippet`. Other differences:
+  - `qrels/score` stays int64, as in the parquet cache, not int32.
+  - Batches are also capped at 2**25 elements, so a 2560-column batch
+    stays small.
+  - A time series with several source URLs gets one space-separated
+    `source` attribute.
+  - `prune_hdf5` deletes only stale `*.hdf5.tmp` files, never ones that
+    may belong to a conversion still running.
+  - The free-space check raises `OSError(ENOSPC)`.
+  - The objects of every layout are listed once in `_hdf5.LAYOUT`
+    (`Hdf5Object(layout, path, ctype, required, attribute, rank)`), and the
+    round-trip tests check that each converted file matches it.
+- **Step 6.** Errors are `export.UnknownDataset` (a `KeyError` that prints
+  without quotes), `export.FormatNotAvailable` (a `ValueError`) and the
+  built-in `FileExistsError`, `IsADirectoryError` and `FileNotFoundError`.
+  Other differences:
+  - `available_formats(entry)` tells `list` when to print `-`.
+  - Without a module prefix, `resolve` tries `dense` first, so dense names
+    never import `graph` or `timeseries` (checked in a subprocess).
+  - The destination is checked before `ensure`, so a bad destination fails
+    before any download.
+  - The "link onto the cache" check resolves the parent of the link but
+    not the link itself, so `--force` over an earlier link to the cache
+    works as a normal replacement.
+  - `_tmp.unused_name` gives the free temporary name that `os.symlink`
+    needs.
+- **Step 7.** `-q` and `--debug` are accepted before or after the
+  subcommand. `requests` errors are `OSError`s, so a single clause maps
+  them to exit 1. `KeyboardInterrupt` exits 130. `list` shows MTEB aliases
+  by their alias (`Entry.link_stem`), not the full `mteb:` name.
+  `prune-hdf5` prints the files and their total size on stdout, and with
+  `--yes` deletes exactly the files it listed. Shared fixtures moved to
+  `tests/conftest.py`.
+- **Step 8.** Each layout object has a one-line description in
+  `_snippets._BLOCKS`. The C++ load is derived from its `ctype`, `rank`
+  and `attribute`, rather than written out per block, so the tailored and
+  generic modes cannot drift apart. Other differences:
+  - Optional attributes use `file.hasAttribute` in the generic snippet.
+  - The bookkeeping root attributes have no block, and the test exempts
+    exactly those.
+  - Golden files live in `tests/snippets/` and are regenerated with
+    `AIDA_DATA_UPDATE_GOLDEN=1`.
+  - The `cpp` test uses `h5c++` when it works, else `g++` with
+    `pkg-config hdf5`, and needs HighFive in `HIGHFIVE_INCLUDE` or the
+    default include path.
+  - All ten golden snippets were compiled with `-Wall` and run against
+    HighFive 3.3.0 (hdf5 1.14.6, from a temporary `nix shell`). Their
+    printed shapes matched h5py.
+- **Step 9.** README section "Command line" with the examples, the HDF5
+  and parquet layouts, `snippet`, the symlink caveat and the disk cost. The
+  storage section now mentions the `hdf5/` directories.
+
+The `network` tests of §5 (`export mnist-784-euclidean`, `export wine`)
+were not written. The test suite went from 269 to 369 offline tests.

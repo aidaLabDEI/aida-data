@@ -5,6 +5,7 @@
 - *(dense)* Add a couple of hosted datasets
 - *(dense)* Cache every non-HDF5 dataset as parquet
 - *(dense)* Separate cache for higgs-highlevel, derived from the higgs cache
+- *(cli)* aida-data export, path, list, prune-hdf5 and snippet; HDF5 export of every dataset
 ## [0.3.0] - 2026-11-17
 
 ### 🚀 Features
