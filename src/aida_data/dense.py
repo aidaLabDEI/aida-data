@@ -37,7 +37,7 @@ DATASETS_DIR = datasets_dir()
 
 _LOGGER = logging.getLogger("aida_data.dense")
 
-# Layout version of the parquet caches written by `_cached`.
+# Layout version of the parquet caches written by `_ensure_cache`.
 _CACHE_VERSION = 1
 
 
@@ -179,12 +179,11 @@ def _read_hdf5_cache(path: Path) -> tuple[np.ndarray, Colors | None]:
     return data, colors
 
 
-def _cached(
-    path: Path, cache_name: str, build: Callable[[Path], tuple]
-) -> tuple[np.ndarray, Colors | None]:
-    """Parse `path` once with `build` and store the result in
-    `path.parent / f"{cache_name}.parquet"`, so that later calls only read the
-    cache. `build(path)` returns `(features, colors)`, `colors` possibly None.
+def _write_cache(path: Path, cache_name: str, build: Callable[[Path], tuple]) -> Path:
+    """Make sure the parquet cache `path.parent / f"{cache_name}.parquet"`
+    exists, and return its path. If it is missing it is made by parsing
+    `path` with `build`, which returns `(features, colors)`, `colors`
+    possibly None. The cache is not read back.
 
     The cache is a zstd-compressed parquet file with one row per point and
     one column per feature and per color (see `_write_parquet_cache`). It is
@@ -211,12 +210,20 @@ def _cached(
             # another cache or loader is kept.
             if not KEEP_RAW and path.is_file() and not _raw_is_shared(path, cache_name):
                 delete_raw(path)
-    # Always read back from the file, so that the first and later calls
-    # return identical arrays.
-    return _read_parquet_cache(cache)
+    return cache
 
 
-# Names of the caches written by `_cached`, shared by the loaders and the
+def _cached(
+    path: Path, cache_name: str, build: Callable[[Path], tuple]
+) -> tuple[np.ndarray, Colors | None]:
+    """`_write_cache`, then the contents of the cache. Always reads back from
+    the file, so that the first and later calls return identical arrays.
+    `load` does not use it: it calls `_ensure_cache` and reads the cache
+    itself."""
+    return _read_parquet_cache(_write_cache(path, cache_name, build))
+
+
+# Names of the caches written by `_ensure_cache`, shared by the loaders and the
 # registrations (`DatasetInfo.cache_name`).
 _PAMAP_CACHE = "pamap"
 _BIOKDD_CACHE = "biokdd"
@@ -252,23 +259,19 @@ def _split_table(
     return data, Colors(values, tuple(colors), tuple(labels))
 
 
-def _load_pamap(path: Path):
-    def load_zipfile(path: Path):
-        with zipfile.ZipFile(path, "r") as zip_ref:
-            arr = []
-            for i in range(1, 10):
-                zfn = f"PAMAP2_Dataset/Protocol/subject10{i}.dat"
-                zf = zip_ref.open(zfn)
-                for line in zf:
-                    line = line.decode()
-                    l = list(map(float, line.strip().split()))
-                    # remove timestamp and activity ID
-                    arr.append(l[2:])
-            X = np.nan_to_num(np.array(arr))  # many NaNs in data, replace them with 0.
-            return X.astype(np.float32), None
-
-    data, _ = _cached(path, _PAMAP_CACHE, load_zipfile)
-    return data, None, None
+def _parse_pamap(path: Path):
+    with zipfile.ZipFile(path, "r") as zip_ref:
+        arr = []
+        for i in range(1, 10):
+            zfn = f"PAMAP2_Dataset/Protocol/subject10{i}.dat"
+            zf = zip_ref.open(zfn)
+            for line in zf:
+                line = line.decode()
+                l = list(map(float, line.strip().split()))
+                # remove timestamp and activity ID
+                arr.append(l[2:])
+        X = np.nan_to_num(np.array(arr))  # many NaNs in data, replace them with 0.
+        return X.astype(np.float32), None
 
 
 def _load_census(path: Path):
@@ -537,79 +540,59 @@ def _load_rt_iot(path: Path):
     return data, None, None, colors
 
 
-def _load_biokdd(path: Path):
+def _parse_biokdd(path: Path):
     """KDD Cup 2004 protein homology (`bio_train.dat`).
 
     Features: the 74 attributes (block id, example id and label dropped).
     Colors: `label` (1 if the protein is homologous to the native sequence).
     """
-
-    def build(path: Path):
-        with tarfile.open(path) as tf, tf.extractfile("bio_train.dat") as fp:
-            df = pd.read_csv(fp, sep="\t", header=None)
-        df = df.rename(columns={2: "label"})
-        return _split_table(df, list(range(3, 77)), ["label"])
-
-    data, colors = _cached(path, _BIOKDD_CACHE, build)
-    return data, None, None, colors
+    with tarfile.open(path) as tf, tf.extractfile("bio_train.dat") as fp:
+        df = pd.read_csv(fp, sep="\t", header=None)
+    df = df.rename(columns={2: "label"})
+    return _split_table(df, list(range(3, 77)), ["label"])
 
 
-def _load_metropt3(path: Path):
+def _parse_metropt3(path: Path):
     """MetroPT-3 air compressor, UCI 791.
 
     Features: the 7 analog sensors (`TP2` to `Motor_current`); the index,
     the timestamp and the 8 digital signals are dropped. No colors.
     """
-
-    def build(path: Path):
-        with zipfile.ZipFile(path) as zf, zf.open("MetroPT3(AirCompressor).csv") as fp:
-            df = pd.read_csv(fp, index_col=0, engine="pyarrow")
-        df = df.drop(columns="timestamp").iloc[:, :-8]
-        return df.to_numpy(dtype=np.float32), None
-
-    data, _ = _cached(path, _METROPT3_CACHE, build)
-    return data, None, None
+    with zipfile.ZipFile(path) as zf, zf.open("MetroPT3(AirCompressor).csv") as fp:
+        df = pd.read_csv(fp, index_col=0, engine="pyarrow")
+    df = df.drop(columns="timestamp").iloc[:, :-8]
+    return df.to_numpy(dtype=np.float32), None
 
 
-def _load_household_power(path: Path):
+def _parse_household_power(path: Path):
     """Individual household electric power consumption, UCI 235.
 
     Features: the 7 measurements (`Date` and `Time` dropped). No colors.
     Missing values (`?`) become NaN, so `load` drops those rows, while
     `parseData.py` replaces them with 0.
     """
-
-    def build(path: Path):
-        with (
-            zipfile.ZipFile(path) as zf,
-            zf.open("household_power_consumption.txt") as fp,
-        ):
-            df = pd.read_csv(fp, sep=";", na_values="?", engine="pyarrow")
-        return df.drop(columns=["Date", "Time"]).to_numpy(dtype=np.float32), None
-
-    data, _ = _cached(path, _HOUSEHOLD_POWER_CACHE, build)
-    return data, None, None
+    with (
+        zipfile.ZipFile(path) as zf,
+        zf.open("household_power_consumption.txt") as fp,
+    ):
+        df = pd.read_csv(fp, sep=";", na_values="?", engine="pyarrow")
+    return df.drop(columns=["Date", "Time"]).to_numpy(dtype=np.float32), None
 
 
-# Large datasets, parsed once and cached (see `_cached`).
+# Large datasets, parsed once and cached (see `_ensure_cache`).
 
 
-def _load_covertype(path: Path):
+def _parse_covertype(path: Path):
     """Covertype, UCI 31 (`covtype.data.gz`), as used by streaming-fair and
     FSR.
 
     Features: the 54 attributes (10 numeric, 4 binary wilderness areas,
     40 binary soil types). Colors: `cover_type` (1 to 7).
     """
-
-    def build(path: Path):
-        with zipfile.ZipFile(path) as zf, zf.open("covtype.data.gz") as fp:
-            df = pd.read_csv(fp, header=None, compression="gzip")
-        df = df.rename(columns={54: "cover_type"})
-        return _split_table(df, list(range(54)), ["cover_type"])
-
-    data, colors = _cached(path, _COVERTYPE_CACHE, build)
-    return data, None, None, colors
+    with zipfile.ZipFile(path) as zf, zf.open("covtype.data.gz") as fp:
+        df = pd.read_csv(fp, header=None, compression="gzip")
+    df = df.rename(columns={54: "cover_type"})
+    return _split_table(df, list(range(54)), ["cover_type"])
 
 
 _CENSUS1990_FEATURES = [
@@ -685,7 +668,7 @@ _CENSUS1990_FEATURES = [
 _CENSUS1990_MEMBER = "USCensus1990.data.txt"
 
 
-def _load_census1990(path: Path):
+def _parse_census1990(path: Path):
     """US Census Data (1990), UCI 116, as used by fair-clustering. Not to be
     confused with the ADBench `census` dataset.
 
@@ -693,14 +676,9 @@ def _load_census1990(path: Path):
     fair-clustering. Colors: `dAge` and `iSex`, which fair-clustering
     registers as two datasets (`census1990`, `census1990_age`).
     """
-
-    def build(path: Path):
-        with zipfile.ZipFile(path) as zf, zf.open(_CENSUS1990_MEMBER) as fp:
-            df = pd.read_csv(fp, engine="pyarrow")
-        return _split_table(df, _CENSUS1990_FEATURES, ["dAge", "iSex"])
-
-    data, colors = _cached(path, _CENSUS1990_CACHE, build)
-    return data, None, None, colors
+    with zipfile.ZipFile(path) as zf, zf.open(_CENSUS1990_MEMBER) as fp:
+        df = pd.read_csv(fp, engine="pyarrow")
+    return _split_table(df, _CENSUS1990_FEATURES, ["dAge", "iSex"])
 
 
 _PHONES_INNER_ZIP = "Activity recognition exp.zip"
@@ -708,7 +686,7 @@ _PHONES_MEMBER = "Activity recognition exp/Phones_accelerometer.csv"
 _PHONES_COLORS = ["gt", "User", "Model", "Device"]
 
 
-def _load_phones(path: Path):
+def _parse_phones(path: Path):
     """Heterogeneity Activity Recognition, UCI 344
     (`Phones_accelerometer.csv`), as used by streaming-fair and MACACO.
 
@@ -716,26 +694,26 @@ def _load_phones(path: Path):
     `gt` (7 values, including `null` for readings outside any activity, as
     in streaming-fair and MACACO), and also `User`, `Model` and `Device`.
     """
-
-    def build(path: Path):
-        with zipfile.ZipFile(path) as zf:
-            inner = zipfile.ZipFile(zf.open(_PHONES_INNER_ZIP))
-            with inner, inner.open(_PHONES_MEMBER) as fp:
-                # `null` is a category of `gt`, not a missing value
-                df = pd.read_csv(
-                    fp,
-                    usecols=["x", "y", "z"] + _PHONES_COLORS,
-                    keep_default_na=False,
-                    na_values=[""],
-                    engine="pyarrow",
-                )
-        return _split_table(df, ["x", "y", "z"], _PHONES_COLORS)
-
-    data, colors = _cached(path, _PHONES_CACHE, build)
-    return data, None, None, colors
+    with zipfile.ZipFile(path) as zf:
+        inner = zipfile.ZipFile(zf.open(_PHONES_INNER_ZIP))
+        with inner, inner.open(_PHONES_MEMBER) as fp:
+            # `null` is a category of `gt`, not a missing value
+            df = pd.read_csv(
+                fp,
+                usecols=["x", "y", "z"] + _PHONES_COLORS,
+                keep_default_na=False,
+                na_values=[""],
+                engine="pyarrow",
+            )
+    return _split_table(df, ["x", "y", "z"], _PHONES_COLORS)
 
 
-def _build_higgs(path: Path):
+def _parse_higgs(path: Path):
+    """HIGGS, UCI 280, as used by FSR and SamRuLe.
+
+    Features: all 28 attributes (21 low level, 7 high level). Colors:
+    `label` (1 for signal, 0 for background).
+    """
     # Stream the 8 GB of CSV in batches: reading it at once with pandas needs
     # about 18 GB of memory.
     from pyarrow import csv, input_stream
@@ -763,23 +741,12 @@ def _build_higgs(path: Path):
     )
 
 
-def _load_higgs(path: Path):
-    """HIGGS, UCI 280, as used by FSR and SamRuLe.
-
-    Features: all 28 attributes (21 low level, 7 high level). Colors:
-    `label` (1 for signal, 0 for background).
-    """
-    data, colors = _cached(path, _HIGGS_CACHE, _build_higgs)
-    return data, None, None, colors
-
-
-def _load_higgs_highlevel(path: Path):
-    """HIGGS with only the 7 high level features (the last 7 columns), as
-    used by streaming-fair and MACACO. Shares download and cache with
-    `higgs`. Colors: `label`.
-    """
-    data, colors = _cached(path, _HIGGS_CACHE, _build_higgs)
-    return np.ascontiguousarray(data[:, -7:]), None, None, colors
+def _last_7_columns(
+    data: np.ndarray, colors: Colors | None
+) -> tuple[np.ndarray, Colors | None]:
+    """The 7 high level features of HIGGS (its last 7 columns), as used by
+    streaming-fair and MACACO (see `DatasetInfo.postprocess`)."""
+    return np.ascontiguousarray(data[:, -7:]), colors
 
 
 @dataclass(frozen=True)
@@ -788,9 +755,15 @@ class DatasetInfo:
     url: str
     loader_function: Callable
     distance_type: str
-    # Name passed to `_cached` by the loader, for datasets parsed once and
-    # cached; None for the others.
+    # Name of the parquet cache (`<cache_name>.parquet` in the dense
+    # directory), for datasets parsed once and cached; None for the others.
+    # For a cached dataset `loader_function(path)` is a pure parser returning
+    # `(data, colors | None)`; for the others it returns
+    # `(train, test, distances[, colors])`.
     cache_name: str | None = None
+    # Applied to `(data, colors)` after reading the cache. Only for
+    # `higgs-highlevel`, which shares the cache of `higgs`.
+    postprocess: Callable | None = None
 
 
 _DATASETS_INFO: dict[str, DatasetInfo] = {}
@@ -1000,7 +973,7 @@ register(
     DatasetInfo(
         "pamap2",
         "http://archive.ics.uci.edu/ml/machine-learning-databases/00231/PAMAP2_Dataset.zip",
-        _load_pamap,
+        _parse_pamap,
         "euclidean",
         _PAMAP_CACHE,
     )
@@ -1150,7 +1123,7 @@ register(
     DatasetInfo(
         "biokdd",
         "https://kdd.org/cupfiles/KDDCupData/2004/data_kddcup04.tar.gz",
-        _load_biokdd,
+        _parse_biokdd,
         "euclidean",
         _BIOKDD_CACHE,
     )
@@ -1160,7 +1133,7 @@ register(
     DatasetInfo(
         "metropt3",
         "https://archive.ics.uci.edu/static/public/791/metropt+3+dataset.zip",
-        _load_metropt3,
+        _parse_metropt3,
         "euclidean",
         _METROPT3_CACHE,
     )
@@ -1170,7 +1143,7 @@ register(
     DatasetInfo(
         "household-power",
         "https://archive.ics.uci.edu/static/public/235/individual+household+electric+power+consumption.zip",
-        _load_household_power,
+        _parse_household_power,
         "euclidean",
         _HOUSEHOLD_POWER_CACHE,
     )
@@ -1180,7 +1153,7 @@ register(
     DatasetInfo(
         "covertype",
         "https://archive.ics.uci.edu/static/public/31/covertype.zip",
-        _load_covertype,
+        _parse_covertype,
         "euclidean",
         _COVERTYPE_CACHE,
     )
@@ -1190,7 +1163,7 @@ register(
     DatasetInfo(
         "census1990",
         "https://archive.ics.uci.edu/static/public/116/us+census+data+1990.zip",
-        _load_census1990,
+        _parse_census1990,
         "euclidean",
         _CENSUS1990_CACHE,
     )
@@ -1200,7 +1173,7 @@ register(
     DatasetInfo(
         "phones",
         "https://archive.ics.uci.edu/static/public/344/heterogeneity+activity+recognition.zip",
-        _load_phones,
+        _parse_phones,
         "euclidean",
         _PHONES_CACHE,
     )
@@ -1210,7 +1183,7 @@ register(
     DatasetInfo(
         "higgs",
         "https://archive.ics.uci.edu/ml/machine-learning-databases/00280/HIGGS.csv.gz",
-        _load_higgs,
+        _parse_higgs,
         "euclidean",
         _HIGGS_CACHE,
     )
@@ -1220,9 +1193,10 @@ register(
     DatasetInfo(
         "higgs-highlevel",
         "https://archive.ics.uci.edu/ml/machine-learning-databases/00280/HIGGS.csv.gz",
-        _load_higgs_highlevel,
+        _parse_higgs,
         "euclidean",
         _HIGGS_CACHE,
+        postprocess=_last_7_columns,
     )
 )
 
@@ -1305,9 +1279,32 @@ def local_path(name: str):
     return _dense_dir() / _raw_name(_DATASETS_INFO[name])
 
 
+def _ensure_cache(name: str) -> Path:
+    """Make sure dataset `name` is available locally and return the file to
+    read: the raw download for datasets with no `cache_name` (HDF5 and the
+    ones not cached yet), else the parquet cache, made if missing.
+
+    Making the cache downloads the raw file if needed, parses it with the
+    loader, writes the cache and deletes the raw file (see `_write_cache`).
+    The cache is not read back, so that exporting a large dataset does not
+    hold two copies of it in memory.
+    """
+    info = _DATASETS_INFO[name]
+    _dense_dir().mkdir(parents=True, exist_ok=True)
+    raw = local_path(name)
+    if info.cache_name is None:
+        _download(info.url, raw)
+        return raw
+    # A cached dataset does not need its raw file, which may have been
+    # deleted (see `_write_cache` and `prune_raw`).
+    if not _cache_exists(name):
+        _download(info.url, raw)
+    return _write_cache(raw, info.cache_name, info.loader_function)
+
+
 def _cache_exists(name: str) -> bool:
     """Whether dataset `name` is cached (parquet, or legacy HDF5 that
-    `_cached` will convert), so that its raw file is not needed."""
+    `_ensure_cache` will convert), so that its raw file is not needed."""
     cache_name = _DATASETS_INFO[name].cache_name
     if cache_name is None:
         return False
@@ -1469,17 +1466,18 @@ def load(
         raise KeyError(
             f"Dataset `{name}` not available. Pick one of {available_datasets()}"
         )
-    _dense_dir().mkdir(parents=True, exist_ok=True)
-
     info = _DATASETS_INFO[name]
-    url, loader, distance = info.url, info.loader_function, info.distance_type
-    local_name = local_path(name)
-    # A cached dataset does not need its raw file, which may have been
-    # deleted (see `_cached` and `prune_raw`).
-    if not _cache_exists(name):
-        _download(url, local_name)
-    train, test, distances, *rest = loader(local_name)
-    colors: Colors | None = rest[0] if rest else None
+    distance = info.distance_type
+    path = _ensure_cache(name)
+    colors: Colors | None
+    if info.cache_name is not None:
+        train, colors = _read_parquet_cache(path)
+        if info.postprocess is not None:
+            train, colors = info.postprocess(train, colors)
+        test = distances = None
+    else:
+        train, test, distances, *rest = info.loader_function(path)
+        colors = rest[0] if rest else None
     # Only some datasets (e.g. MTEB ones) have ids for their rows.
     ids: np.ndarray | None = None
     query_ids: np.ndarray | None = None

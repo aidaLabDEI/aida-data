@@ -230,7 +230,7 @@ def test_pamap_parsed_from_zip_and_cached(tmp_path):
                 f"PAMAP2_Dataset/Protocol/subject10{i}.dat",
                 "\n".join(" ".join(map(str, line)) for line in lines) + "\n",
             )
-    data, _, _ = dense._load_pamap(path)
+    data, _ = dense._cached(path, dense._PAMAP_CACHE, dense._parse_pamap)
     assert data.shape == (18, 2)
     np.testing.assert_array_equal(data[:2], [[2.0, 3.0], [4.0, 0.0]])
     assert (tmp_path / "pamap.parquet").is_file()

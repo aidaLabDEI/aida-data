@@ -191,7 +191,7 @@ def test_biokdd(tmp_path):
             info = tarfile.TarInfo(name)
             info.size = len(payload)
             tf.addfile(info, io.BytesIO(payload))
-    data, _, _, colors = dense._load_biokdd(path)
+    data, colors = dense._cached(path, dense._BIOKDD_CACHE, dense._parse_biokdd)
     assert data.shape == (2, 74)
     np.testing.assert_array_equal(data[1], -np.arange(74))
     np.testing.assert_array_equal(colors.values[:, 0], [0, 1])
@@ -204,7 +204,7 @@ def test_metropt3(tmp_path):
     path = _zip(
         tmp_path / "metropt3.zip", {"MetroPT3(AirCompressor).csv": header + row}
     )
-    data, _, _ = dense._load_metropt3(path)
+    data, _ = dense._cached(path, dense._METROPT3_CACHE, dense._parse_metropt3)
     np.testing.assert_array_equal(data, [[1, 2, 3, 4, 5, 6, 7]])
 
 
@@ -217,7 +217,7 @@ def test_household_power(tmp_path):
     path = _zip(
         tmp_path / "power.zip", {"household_power_consumption.txt": content}
     )
-    data, _, _ = dense._load_household_power(path)
+    data, _ = dense._cached(path, dense._HOUSEHOLD_POWER_CACHE, dense._parse_household_power)
     assert data.shape == (2, 7)
     np.testing.assert_allclose(data[0], [4.216, 0.418, 234.84, 18.4, 0, 1, 17], rtol=1e-6)
     assert np.isnan(data[1]).all()
@@ -240,7 +240,7 @@ def test_covertype(tmp_path):
     ]
     payload = gzip.compress(("\n".join(rows) + "\n").encode())
     path = _zip(tmp_path / "covertype.zip", {"covtype.data.gz": payload})
-    data, _, _, colors = dense._load_covertype(path)
+    data, colors = dense._cached(path, dense._COVERTYPE_CACHE, dense._parse_covertype)
     assert data.shape == (2, 54)
     np.testing.assert_array_equal(data[1], np.arange(1, 55))
     assert colors.labels == (("2", "5"),)
@@ -256,7 +256,7 @@ def test_census1990(tmp_path):
     ]
     content = "\n".join(",".join(map(str, r)) for r in [columns] + rows) + "\n"
     path = _zip(tmp_path / "census.zip", {dense._CENSUS1990_MEMBER: content})
-    data, _, _, colors = dense._load_census1990(path)
+    data, colors = dense._cached(path, dense._CENSUS1990_CACHE, dense._parse_census1990)
     np.testing.assert_array_equal(data[0], np.arange(66))
     assert colors.names == ("dAge", "iSex")
     assert _decode(colors, "dAge") == ["5", "3"]
@@ -279,7 +279,7 @@ def test_phones(tmp_path):
         tmp_path / "phones.zip",
         {dense._PHONES_INNER_ZIP: inner.getvalue(), "Still exp.zip": b""},
     )
-    data, _, _, colors = dense._load_phones(path)
+    data, colors = dense._cached(path, dense._PHONES_CACHE, dense._parse_phones)
     np.testing.assert_allclose(
         data, [[-5.958191, 0.6880646, 8.135345], [-5.95224, 0.6702118, 8.136536]]
     )
@@ -296,12 +296,12 @@ def test_higgs_and_highlevel_share_the_cache(tmp_path):
     content = "\n".join(",".join(f"{v:.18e}" for v in r) for r in rows) + "\n"
     path = tmp_path / "HIGGS.csv.gz"
     path.write_bytes(gzip.compress(content.encode()))
-    data, _, _, colors = dense._load_higgs(path)
+    data, colors = dense._cached(path, dense._HIGGS_CACHE, dense._parse_higgs)
     assert data.shape == (2, 28)
     np.testing.assert_allclose(data[0], np.arange(28) / 10, rtol=1e-6)
     assert _decode(colors, "label") == ["1", "0"]
     mtime = (tmp_path / "higgs.parquet").stat().st_mtime_ns
-    high, _, _, colors_high = dense._load_higgs_highlevel(path)
+    high, colors_high = dense._last_7_columns(*dense._cached(path, dense._HIGGS_CACHE, dense._parse_higgs))
     np.testing.assert_array_equal(high, data[:, -7:])
     assert high.flags["C_CONTIGUOUS"]
     np.testing.assert_array_equal(colors_high.values, colors.values)

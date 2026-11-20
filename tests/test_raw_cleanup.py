@@ -10,16 +10,9 @@ FEATURES = np.arange(12, dtype=np.float32).reshape(4, 3)
 COLORS = Colors(np.array([[0], [1], [0], [1]]), ("c",), (("a", "b"),))
 
 
-def _fake_loader(cache_name):
-    def loader(path):
-        def build(path):
-            assert path.read_text() == "raw"
-            return FEATURES.copy(), COLORS
-
-        data, colors = dense._cached(path, cache_name, build)
-        return data, None, None, colors
-
-    return loader
+def _fake_parser(path):
+    assert path.read_text() == "raw"
+    return FEATURES.copy(), COLORS
 
 
 @pytest.fixture(autouse=True)
@@ -42,7 +35,7 @@ def fake_datasets(tmp_path, monkeypatch):
         ("fake-b", "https://example.com/shared.zip", "fake-b"),
     ]:
         register(
-            DatasetInfo(name, url, _fake_loader(cache_name), "euclidean", cache_name)
+            DatasetInfo(name, url, _fake_parser, "euclidean", cache_name)
         )
     return downloads
 
