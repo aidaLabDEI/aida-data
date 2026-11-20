@@ -31,6 +31,21 @@ def _create_unique(path: Path, suffix: str) -> Path:
     raise FileExistsError(f"no free temporary name for {path}")
 
 
+def unused_name(path: Path, suffix: str) -> Path:
+    """A fresh name `<path>.<random><suffix>` next to `path`, not created.
+
+    For callers that cannot start from an empty file, such as `os.symlink`
+    or building a directory. Same naming scheme as `_create_unique`. The
+    name is only free at the time of the call; creation with `symlink`,
+    `link` or `mkdir` fails (rather than overwrites) if someone took it.
+    """
+    for _ in range(100):
+        tmp = path.with_name(f"{path.name}.{secrets.token_hex(4)}{suffix}")
+        if not os.path.lexists(tmp):
+            return tmp
+    raise FileExistsError(f"no free temporary name for {path}")
+
+
 @contextmanager
 def atomic_path(path: Path, suffix: str):
     """Yield a unique temporary path next to `path`. On a normal exit it
