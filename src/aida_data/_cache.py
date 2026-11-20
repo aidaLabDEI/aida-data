@@ -29,17 +29,23 @@ def write_table(path: Path, table: pa.Table, meta: dict, **options):
         pq.write_table(table, tmp_path, **options)
 
 
-def read_table(path: Path, version: int) -> tuple[pa.Table, dict]:
-    """Read the parquet cache `path` with its `aida_data` metadata, raising
-    `ValueError` if the metadata is missing or has a different `version`."""
-    table = pq.read_table(path)
-    meta = json.loads((table.schema.metadata or {}).get(b"aida_data", b"null"))
+def parse_meta(schema: pa.Schema, path: Path, version: int) -> dict:
+    """The `aida_data` metadata of the parquet `schema` of the cache `path`,
+    raising `ValueError` if it is missing or has a different `version`."""
+    meta = json.loads((schema.metadata or {}).get(b"aida_data", b"null"))
     if not isinstance(meta, dict) or meta.get("version") != version:
         raise ValueError(
             f"{path} is not a cache in a known format, delete it to parse the "
             "dataset again"
         )
-    return table, meta
+    return meta
+
+
+def read_table(path: Path, version: int) -> tuple[pa.Table, dict]:
+    """Read the parquet cache `path` with its `aida_data` metadata, raising
+    `ValueError` if the metadata is missing or has a different `version`."""
+    table = pq.read_table(path)
+    return table, parse_meta(table.schema, path, version)
 
 
 def delete_raw(*paths: Path):

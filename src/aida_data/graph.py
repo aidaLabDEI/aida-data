@@ -341,7 +341,7 @@ def _ensure_cache(name: str) -> Path:
 def prune_raw(dry_run: bool = True) -> list[Path]:
     """Raw downloads of datasets whose cache exists, which are no longer
     needed. With `dry_run=False` they are deleted. Also lists the
-    `*.part` and `*.parquet.tmp` files left by downloads and cache
+    `*.part`, `*.parquet.tmp` and `*.hdf5.tmp` files left by downloads and cache
     writes that were killed, once they are more than 24 hours old.
     """
     paths = [
@@ -352,6 +352,8 @@ def prune_raw(dry_run: bool = True) -> list[Path]:
         if path.is_file()
     ]
     paths += stale_temporaries(DATASETS_DIR / "graphs")
+    # Converted HDF5 files (see `_hdf5`), under `hdf5/` and below.
+    paths += stale_temporaries(DATASETS_DIR / "graphs" / "hdf5", recursive=True)
     total = sum(path.stat().st_size for path in paths)
     _LOGGER.info(
         "%s %d raw and stale temporary files (%.1f MiB): %s",

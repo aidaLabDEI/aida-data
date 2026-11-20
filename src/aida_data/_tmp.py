@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 # Suffixes of the temporary files made through `atomic_path`.
-TEMPORARY_SUFFIXES = (".part", ".parquet.tmp")
+TEMPORARY_SUFFIXES = (".part", ".parquet.tmp", ".hdf5.tmp")
 
 # Temporaries older than this were left by a killed process: no running
 # download or cache write keeps a file untouched that long.

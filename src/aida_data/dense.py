@@ -1334,6 +1334,30 @@ def _ensure_cache(name: str) -> Path:
     return _write_cache(raw, info.cache_name, info.loader_function)
 
 
+def _ensure_mteb(name: str) -> Path:
+    """Make sure the MTEB pair `name` (`mteb:<task>:<model>`, or an alias)
+    is cached and return its cache directory: the local one if
+    `corpus.parquet` is there, else the hosted copy, downloaded. Raises
+    `LookupError` if it is neither cached nor hosted. Unlike `load`, it never
+    encodes (that is slow and needs the `mteb` extra) and does not check the
+    model revision: callers only expose the files."""
+    from . import _mteb  # lazy: `_mteb` imports this module
+
+    name = resolve_name(name)
+    task, model = _mteb.parse_name(name)
+    directory = _mteb.cache_dir(task, model)
+    if (
+        not (directory / _mteb.CORPUS_FILE).exists()
+        and not _mteb.fetch_hosted(task, model, directory)
+    ):
+        raise LookupError(
+            f"{name} is not hosted and not cached; encode it first with "
+            f"python -c 'from aida_data import dense; dense.load(\"{name}\")' "
+            "(needs aida-data[mteb])"
+        )
+    return directory
+
+
 def _cache_exists(name: str) -> bool:
     """Whether dataset `name` is cached (parquet, or legacy HDF5 that
     `_ensure_cache` will convert), so that its raw file is not needed."""
@@ -1366,7 +1390,7 @@ def prune_raw(dry_run: bool = True) -> list[Path]:
     """Raw downloads of cached datasets that are no longer needed, because
     their cache exists and no other dataset uses them. With
     `dry_run=False` they are deleted. Also lists the
-    `*.part` and `*.parquet.tmp` files left by downloads and cache
+    `*.part`, `*.parquet.tmp` and `*.hdf5.tmp` files left by downloads and cache
     writes that were killed, once they are more than 24 hours old.
     """
     paths = []
@@ -1384,6 +1408,8 @@ def prune_raw(dry_run: bool = True) -> list[Path]:
     paths += stale_temporaries(_dense_dir())
     # MTEB caches live in `dense/mteb/<task>/<model>/`; they have no raw files.
     paths += stale_temporaries(_dense_dir() / "mteb", recursive=True)
+    # Converted HDF5 files (see `_hdf5`), under `dense/hdf5/` and below.
+    paths += stale_temporaries(_dense_dir() / "hdf5", recursive=True)
     total = sum(path.stat().st_size for path in paths)
     _LOGGER.info(
         "%s %d raw and stale temporary files (%.1f MiB): %s",
