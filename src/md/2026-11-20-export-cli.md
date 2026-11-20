@@ -702,4 +702,5 @@ docs commit), as planned, with these differences:
   storage section now mentions the `hdf5/` directories.
 
 The `network` tests of §5 (`export mnist-784-euclidean`, `export wine`)
-were not written. The test suite went from 269 to 369 offline tests.
+are in `tests/test_export_network.py`, outside the offline fixtures of
+`test_cli.py`. Both pass. The offline suite went from 269 to 369 tests.

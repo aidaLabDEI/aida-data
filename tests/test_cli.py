@@ -161,3 +161,4 @@ def test_quiet_silences_info(capsys, cached, monkeypatch):
 def test_python_dash_m_help():
     result = subprocess.run([sys.executable, "-m", "aida_data", "--help"], capture_output=True, text=True)
     assert result.returncode == 0 and "aida-data" in result.stdout
+
