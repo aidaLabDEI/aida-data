@@ -3,6 +3,7 @@
 ### 🚀 Features
 
 - *(dense)* Add a couple of hosted datasets
+- *(dense)* Cache every non-HDF5 dataset as parquet
 ## [0.3.0] - 2026-11-17
 
 ### 🚀 Features

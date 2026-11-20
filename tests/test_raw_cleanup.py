@@ -1,5 +1,9 @@
 """Raw downloads of cached datasets: skipped once cached, deleted after parse."""
 
+import subprocess
+import sys
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -135,3 +139,47 @@ def test_prune_raw(dense_dir, monkeypatch):
     assert not (dense_dir / "fake.zip").exists()
     assert (dense_dir / "shared.zip").is_file()
     assert (dense_dir / "unrelated.csv").is_file()
+
+
+def test_every_dense_dataset_is_cached_or_hdf5():
+    # `cache_name is None` is what marks the HDF5 datasets. Checked in a
+    # fresh interpreter, because other tests leave fake datasets registered.
+    code = (
+        "from aida_data import dense\n"
+        "bad = [n for n, i in dense._DATASETS_INFO.items() if i.cache_name is None"
+        " and not dense._raw_name(i).endswith('.hdf5')]\n"
+        "assert not bad, bad\n"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
+
+
+def test_athlete_cached_on_first_load(dense_dir, monkeypatch):
+    csv = (
+        '"ID","Name","Sex","Age","Height","Weight","Team"\n'
+        '"1","A","M",24,180,80,"China"\n'
+        '"2","B","F",NA,170,60,"China"\n'
+        '"3","C","F",21,165,55.5,"Italy"\n'
+    )
+
+    def download(url, destination):
+        if not destination.is_file():
+            destination.write_text(csv)
+
+    monkeypatch.setattr(dense, "_download", download)
+    first = load("athlete")
+    assert (dense_dir / "athlete.parquet").is_file()
+    assert not (dense_dir / "athlete_events.csv").exists()
+
+    def fail(*args):
+        raise AssertionError("must not download or parse")
+
+    monkeypatch.setattr(dense, "_download", fail)
+    info = dense._DATASETS_INFO["athlete"]
+    monkeypatch.setitem(
+        dense._DATASETS_INFO, "athlete", replace(info, loader_function=fail)
+    )
+    second = load("athlete")
+    np.testing.assert_array_equal(first.dataset, second.dataset)
+    np.testing.assert_array_equal(first.colors.values, second.colors.values)
+    assert first.colors.labels == second.colors.labels
+    assert first.dataset.shape == (2, 3)

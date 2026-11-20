@@ -14,6 +14,7 @@ import json
 import logging
 import re
 import tarfile
+import tempfile
 import zipfile
 from dataclasses import dataclass, replace
 from functools import partial
@@ -274,13 +275,13 @@ def _parse_pamap(path: Path):
         return X.astype(np.float32), None
 
 
-def _load_census(path: Path):
+def _parse_census(path: Path):
     raw = np.load(path)
     data = raw["X"].astype(np.float32)
-    return data, None, None
+    return data, None
 
 
-def _load_densired_hard(path: Path):
+def _parse_densired_hard(path: Path):
     """Synthetic densired dataset (https://github.com/PhilJahn/DENSIRED):
     5000 tight, well-separated clusters (core_num=1, radius=0.15) over
     n=100000 points, dim=100.
@@ -306,54 +307,52 @@ def _load_densired_hard(path: Path):
         np.savez(path, X=data)
     else:
         data = np.load(path)["X"].astype(np.float32)
-    return data, None, None
+    return data, None
 
 
-def _load_ht(path: Path):
-    # Unzip
-    with zipfile.ZipFile(path, "r") as zip_ref:
-        zip_ref.extractall(path.parent)
-        # Unzip the inner file "HT_Sensor_dataset.zip"
-        inner_zip_path = path.parent / "HT_Sensor_dataset.zip"
-        # if there is an inner zip file, extract it
+def _parse_ht(path: Path):
+    # Extract into a temporary directory, so that nothing is left next to
+    # the download.
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        with zipfile.ZipFile(path, "r") as zip_ref:
+            zip_ref.extractall(tmp)
+        # Unzip the inner file "HT_Sensor_dataset.zip", if there is one
+        inner_zip_path = tmp / "HT_Sensor_dataset.zip"
         if inner_zip_path.is_file():
             with zipfile.ZipFile(inner_zip_path, "r") as inner_zip_ref:
-                inner_zip_ref.extractall(path.parent)
-    # Load data
-    data_path = path.parent / "HT_Sensor_dataset.dat"
-    data = pd.read_csv(data_path, sep=r"\s+")
+                inner_zip_ref.extractall(tmp)
+        data = pd.read_csv(tmp / "HT_Sensor_dataset.dat", sep=r"\s+")
     del data["id"]
     data = data.to_numpy().astype(np.float32)
     data = np.nan_to_num(data)
-    return data, None, None
+    return data, None
 
 
-def _load_fbin(path: Path):
+def _parse_fbin(path: Path):
     # `.fbin` layout: uint32 number of vectors, uint32 dimension, then the
     # vectors themselves as row-major float32.
     with open(path, "rb") as fp:
         n, d = np.fromfile(fp, dtype=np.uint32, count=2)
         data = np.fromfile(fp, dtype=np.float32, count=int(n) * int(d))
     data = data.reshape(int(n), int(d))
-    return data, None, None
+    return data, None
 
 
-def _load_chem(path: Path):
-    # Unzip
-    # Catch and handle not finding the file, try with the explicit file name
-    try:
-        with zipfile.ZipFile(path, "r") as zip_ref:
-            zip_ref.extractall(path.parent)
-        # Load data
-        data_path = (
-            path.parent / "gas+sensor+array+under+dynamic+gas+mixtures/ethylene_CO.txt"
-        )
-        data = pd.read_csv(data_path, sep=r"\s+").to_numpy().astype(np.float32)
-    except Exception:
-        data_path = path.parent / "ethylene_CO.txt"
-        data = pd.read_csv(data_path, sep=r"\s+").to_numpy().astype(np.float32)
+def _parse_chem(path: Path):
+    # Read the member directly: depending on the archive, it is at the root
+    # or in a directory.
+    with zipfile.ZipFile(path, "r") as zip_ref:
+        members = [
+            n for n in zip_ref.namelist() if Path(n).name == "ethylene_CO.txt"
+        ]
+        if not members:
+            raise ValueError(f"{path} has no ethylene_CO.txt")
+        member = members[0]
+        with zip_ref.open(member) as fp:
+            data = pd.read_csv(fp, sep=r"\s+").to_numpy().astype(np.float32)
     data = np.nan_to_num(data)
-    return data, None, None
+    return data, None
 
 
 # Colored datasets from fair-clustering
@@ -380,7 +379,7 @@ _ADULT_COLUMNS = [
 ]
 
 
-def _load_adult(path: Path):
+def _parse_adult(path: Path):
     """UCI Adult (`adult.data` only, not `adult.test`).
 
     Features: `age, fnlwgt, education-num, capital-gain, hours-per-week`.
@@ -396,10 +395,10 @@ def _load_adult(path: Path):
         )
     features = ["age", "fnlwgt", "education-num", "capital-gain", "hours-per-week"]
     data, colors = _split_table(df, features, ["sex", "race", "marital-status"])
-    return data, None, None, colors
+    return data, colors
 
 
-def _load_athlete(path: Path):
+def _parse_athlete(path: Path):
     """Olympic athletes 1896-2016 (https://github.com/rgriff23/Olympic_history).
 
     Features: `Age, Height, Weight`. Colors: `Sex`. Rows with missing
@@ -409,10 +408,10 @@ def _load_athlete(path: Path):
     """
     df = pd.read_csv(path, na_values=["", "NA"])
     data, colors = _split_table(df, ["Age", "Height", "Weight"], ["Sex"])
-    return data, None, None, colors
+    return data, colors
 
 
-def _load_diabetes(path: Path):
+def _parse_diabetes(path: Path):
     """Diabetes 130-US hospitals for years 1999-2008 (UCI 296).
 
     Features: `age` (lower bound of the 10-year bracket), `time_in_hospital,
@@ -438,10 +437,10 @@ def _load_diabetes(path: Path):
         "number_diagnoses",
     ]
     data, colors = _split_table(df, features, ["gender", "race"])
-    return data, None, None, colors
+    return data, colors
 
 
-def _load_creditcard(path: Path):
+def _parse_creditcard(path: Path):
     """Default of credit card clients (UCI 350).
 
     Features: `LIMIT_BAL, AGE, BILL_AMT1..6, PAY_AMT1..6`.
@@ -455,14 +454,14 @@ def _load_creditcard(path: Path):
         + [f"PAY_AMT{i}" for i in range(1, 7)]
     )
     data, colors = _split_table(df, features, ["SEX", "EDUCATION", "MARRIAGE"])
-    return data, None, None, colors
+    return data, colors
 
 
-def _load_kfc(path: Path, features: list[str], colors: list[str]):
+def _parse_kfc(path: Path, features: list[str], colors: list[str]):
     """Datasets of "KFC: A Scalable Approximation Algorithm for k-center Fair
     Clustering" (https://github.com/FaroukY/KFC-ScalableFairClustering)."""
     data, colors = _split_table(pd.read_csv(path), features, colors)
-    return data, None, None, colors
+    return data, colors
 
 
 # Datasets of the silhouette repository (`research/data/parseData.py`).
@@ -471,7 +470,7 @@ def _load_kfc(path: Path, features: list[str], colors: list[str]):
 # too.
 
 
-def _load_breast(path: Path):
+def _parse_breast(path: Path):
     """Breast Cancer Wisconsin (Diagnostic), UCI 17 (`wdbc.data`).
 
     Features: the 30 real-valued attributes (`id` dropped).
@@ -481,10 +480,10 @@ def _load_breast(path: Path):
         df = pd.read_csv(fp, header=None)
     df = df.rename(columns={0: "id", 1: "diagnosis"})
     data, colors = _split_table(df, list(range(2, 32)), ["diagnosis"])
-    return data, None, None, colors
+    return data, colors
 
 
-def _load_wine(path: Path):
+def _parse_wine(path: Path):
     """Wine quality, UCI 186: red wines followed by white wines.
 
     Features: the 11 physicochemical attributes. Colors: `type`
@@ -498,10 +497,10 @@ def _load_wine(path: Path):
     df = pd.concat(parts, ignore_index=True)
     features = [c for c in df.columns if c not in ("quality", "type")]
     data, colors = _split_table(df, features, ["type", "quality"])
-    return data, None, None, colors
+    return data, colors
 
 
-def _load_shuttle(path: Path):
+def _parse_shuttle(path: Path):
     """Statlog (Shuttle), UCI 148: `shuttle.trn` followed by `shuttle.tst`.
 
     Features: the 9 numeric attributes. Colors: `class` (1 to 7).
@@ -519,10 +518,10 @@ def _load_shuttle(path: Path):
     df = pd.read_csv(io.BytesIO(train + test), sep=" ", header=None)
     df = df.rename(columns={9: "class"})
     data, colors = _split_table(df, list(range(9)), ["class"])
-    return data, None, None, colors
+    return data, colors
 
 
-def _load_rt_iot(path: Path):
+def _parse_rt_iot(path: Path):
     """RT-IoT2022, UCI 942.
 
     Features: all numeric attributes (the index column, the ports
@@ -537,7 +536,7 @@ def _load_rt_iot(path: Path):
     dropped = {"id.orig_p", "id.resp_p", "proto", "service", "Attack_type"}
     features = [c for c in df.columns if c not in dropped]
     data, colors = _split_table(df, features, ["Attack_type"])
-    return data, None, None, colors
+    return data, colors
 
 
 def _parse_biokdd(path: Path):
@@ -756,10 +755,11 @@ class DatasetInfo:
     loader_function: Callable
     distance_type: str
     # Name of the parquet cache (`<cache_name>.parquet` in the dense
-    # directory), for datasets parsed once and cached; None for the others.
-    # For a cached dataset `loader_function(path)` is a pure parser returning
-    # `(data, colors | None)`; for the others it returns
-    # `(train, test, distances[, colors])`.
+    # directory), for datasets parsed once and cached; None for the HDF5
+    # datasets (a test checks that every other dataset has one). For a
+    # cached dataset `loader_function(path)` is a pure parser returning
+    # `(data, colors | None)`; for the HDF5 ones it returns
+    # `(train, test, distances)`.
     cache_name: str | None = None
     # Applied to `(data, colors)` after reading the cache. Only for
     # `higgs-highlevel`, which shares the cache of `higgs`.
@@ -983,8 +983,9 @@ register(
     DatasetInfo(
         "census",
         "https://github.com/Minqi824/ADBench/raw/main/adbench/datasets/Classical/9_census.npz",
-        _load_census,
+        _parse_census,
         "euclidean",
+        "census",
     )
 )
 
@@ -992,8 +993,9 @@ register(
     DatasetInfo(
         "ht",
         "https://archive.ics.uci.edu/static/public/362/gas+sensors+for+home+activity+monitoring.zip",
-        _load_ht,
+        _parse_ht,
         "euclidean",
+        "ht",
     )
 )
 
@@ -1001,8 +1003,9 @@ register(
     DatasetInfo(
         "yandex-t2i",
         "https://storage.yandexcloud.net/yandex-research/ann-datasets/T2I/base.1M.fbin",
-        _load_fbin,
+        _parse_fbin,
         "euclidean",
+        "yandex-t2i",
     )
 )
 
@@ -1010,8 +1013,9 @@ register(
     DatasetInfo(
         "chem",
         "https://archive.ics.uci.edu/static/public/322/gas+sensor+array+under+dynamic+gas+mixtures.zip",
-        _load_chem,
+        _parse_chem,
         "euclidean",
+        "chem",
     )
 )
 
@@ -1019,8 +1023,9 @@ register(
     DatasetInfo(
         "adult",
         "https://archive.ics.uci.edu/static/public/2/adult.zip",
-        _load_adult,
+        _parse_adult,
         "euclidean",
+        "adult",
     )
 )
 
@@ -1028,8 +1033,9 @@ register(
     DatasetInfo(
         "athlete",
         "https://github.com/rgriff23/Olympic_history/raw/master/data/athlete_events.csv",
-        _load_athlete,
+        _parse_athlete,
         "euclidean",
+        "athlete",
     )
 )
 
@@ -1037,8 +1043,9 @@ register(
     DatasetInfo(
         "diabetes",
         "https://archive.ics.uci.edu/static/public/296/diabetes+130-us+hospitals+for+years+1999-2008.zip",
-        _load_diabetes,
+        _parse_diabetes,
         "euclidean",
+        "diabetes",
     )
 )
 
@@ -1046,8 +1053,9 @@ register(
     DatasetInfo(
         "creditcard",
         "https://archive.ics.uci.edu/static/public/350/default+of+credit+card+clients.zip",
-        _load_creditcard,
+        _parse_creditcard,
         "euclidean",
+        "creditcard",
     )
 )
 
@@ -1078,8 +1086,9 @@ for _name, _file, _features, _colors in [
         DatasetInfo(
             _name,
             _KFC_BASE + _file,
-            partial(_load_kfc, features=_features, colors=_colors),
+            partial(_parse_kfc, features=_features, colors=_colors),
             "euclidean",
+            _name,
         )
     )
 
@@ -1087,8 +1096,9 @@ register(
     DatasetInfo(
         "breast",
         "https://archive.ics.uci.edu/static/public/17/breast+cancer+wisconsin+diagnostic.zip",
-        _load_breast,
+        _parse_breast,
         "euclidean",
+        "breast",
     )
 )
 
@@ -1096,8 +1106,9 @@ register(
     DatasetInfo(
         "wine",
         "https://archive.ics.uci.edu/static/public/186/wine+quality.zip",
-        _load_wine,
+        _parse_wine,
         "euclidean",
+        "wine",
     )
 )
 
@@ -1105,8 +1116,9 @@ register(
     DatasetInfo(
         "shuttle",
         "https://archive.ics.uci.edu/static/public/148/statlog+shuttle.zip",
-        _load_shuttle,
+        _parse_shuttle,
         "euclidean",
+        "shuttle",
     )
 )
 
@@ -1114,8 +1126,9 @@ register(
     DatasetInfo(
         "rt-iot2022",
         "https://archive.ics.uci.edu/static/public/942/rt-iot2022.zip",
-        _load_rt_iot,
+        _parse_rt_iot,
         "euclidean",
+        "rt-iot2022",
     )
 )
 
@@ -1201,10 +1214,14 @@ register(
 )
 
 # Not a real download URL: this dataset is synthetic (see
-# _load_densired_hard).
+# _parse_densired_hard).
 register(
     DatasetInfo(
-        "densired-hard", "file:///densired-hard.npz", _load_densired_hard, "euclidean"
+        "densired-hard",
+        "file:///densired-hard.npz",
+        _parse_densired_hard,
+        "euclidean",
+        "densired-hard",
     )
 )
 
@@ -1281,8 +1298,8 @@ def local_path(name: str):
 
 def _ensure_cache(name: str) -> Path:
     """Make sure dataset `name` is available locally and return the file to
-    read: the raw download for datasets with no `cache_name` (HDF5 and the
-    ones not cached yet), else the parquet cache, made if missing.
+    read: the raw download for datasets with no `cache_name` (the HDF5
+    ones), else the parquet cache, made if missing.
 
     Making the cache downloads the raw file if needed, parses it with the
     loader, writes the cache and deletes the raw file (see `_write_cache`).

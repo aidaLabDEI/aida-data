@@ -28,8 +28,7 @@ def test_adult(tmp_path):
         "",
     ]
     path = _zip(tmp_path / "adult.zip", {"adult.data": "\n".join(rows)})
-    data, test, distances, colors = dense._load_adult(path)
-    assert test is None and distances is None
+    data, colors = dense._parse_adult(path)
     np.testing.assert_array_equal(
         data, [[39, 77516, 13, 2174, 40], [50, 83311, 13, 0, 13]]
     )
@@ -48,7 +47,7 @@ def test_athlete(tmp_path):
         '"2","B","F",NA,170,60,"China"\n'
         '"3","C","F",21,165,55.5,"Italy"\n'
     )
-    data, _, _, colors = dense._load_athlete(path)
+    data, colors = dense._parse_athlete(path)
     np.testing.assert_array_equal(data, [[24, 180, 80], [21, 165, 55.5]])
     assert _decode(colors, "Sex") == ["M", "F"]
 
@@ -65,7 +64,7 @@ def test_diabetes(tmp_path):
         tmp_path / "diabetes.zip",
         {"diabetic_data.csv": "\n".join([header] + rows) + "\n"},
     )
-    data, _, _, colors = dense._load_diabetes(path)
+    data, colors = dense._parse_diabetes(path)
     np.testing.assert_allclose(
         data,
         [
@@ -86,7 +85,7 @@ def test_kfc(tmp_path):
         "33,4789,220,7,2,1\n"
         "35,1350,185,4,1,2\n"
     )
-    data, _, _, colors = dense._load_kfc(
+    data, colors = dense._parse_kfc(
         path, features=["age", "balance", "duration"], colors=["marital"]
     )
     np.testing.assert_array_equal(data[:, 0], [30, 33, 35])
@@ -126,7 +125,7 @@ def test_breast(tmp_path):
         ",".join(["842517", "B"] + [str(i + 0.5) for i in range(30)]),
     ]
     path = _zip(tmp_path / "breast.zip", {"wdbc.data": "\n".join(rows) + "\n"})
-    data, _, _, colors = dense._load_breast(path)
+    data, colors = dense._parse_breast(path)
     assert data.shape == (2, 30)
     np.testing.assert_array_equal(data[0], np.arange(30))
     assert _decode(colors, "diagnosis") == ["M", "B"]
@@ -141,7 +140,7 @@ def test_wine(tmp_path):
             "winequality-white.csv": header + "7;0.27;8.8;6\n6.3;0.3;9.5;5\n",
         },
     )
-    data, _, _, colors = dense._load_wine(path)
+    data, colors = dense._parse_wine(path)
     np.testing.assert_allclose(data, [[7.4, 0.7, 9.4], [7, 0.27, 8.8], [6.3, 0.3, 9.5]])
     assert colors.names == ("type", "quality")
     assert _decode(colors, "type") == ["red", "white", "white"]
@@ -156,7 +155,7 @@ def test_shuttle(tmp_path):
         tmp_path / "shuttle.zip",
         {"shuttle.trn.Z": _compress_z(train), "shuttle.tst": test},
     )
-    data, _, _, colors = dense._load_shuttle(path)
+    data, colors = dense._parse_shuttle(path)
     assert data.shape == (3, 9)
     np.testing.assert_array_equal(data[:, 0], [55, 56, 37])
     assert colors.labels == (("1", "4"),)
@@ -171,7 +170,7 @@ def test_rt_iot(tmp_path):
         "2,44459,53,udp,dns,0.1,1,0,DOS_SYN_Hping\n"
     )
     path = _zip(tmp_path / "rt-iot2022.zip", {"RT_IOT2022": content})
-    data, _, _, colors = dense._load_rt_iot(path)
+    data, colors = dense._parse_rt_iot(path)
     np.testing.assert_allclose(data, [[32.0, 9, 502], [31.8, 9, 502], [0.1, 1, 0]])
     assert colors.labels == (("DOS_SYN_Hping", "MQTT_Publish"),)
 

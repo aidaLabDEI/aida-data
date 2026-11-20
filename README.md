@@ -49,7 +49,7 @@ print(pipeline.named_steps["pca"].explained_variance_ratio_)
 ```
 
 Datasets are downloaded to `<root>/dense` (see [Where the datasets are
-stored](#where-the-datasets-are-stored)). Large datasets are parsed once into a
+stored](#where-the-datasets-are-stored)). Every dataset that is not an HDF5 file is parsed once into a
 zstd-compressed `<name>.parquet` cache next to the download. The raw download is then deleted, since it is not needed anymore;
 set `AIDA_DATA_KEEP_RAW=1` to keep it. Downloads and caches are written to
 a temporary file with a unique name (`<name>.<random>.part` or
