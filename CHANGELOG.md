@@ -1,11 +1,27 @@
-## [0.3.1]
+## [0.4.0] - 2026-11-20
 
 ### 🚀 Features
 
 - *(dense)* Add a couple of hosted datasets
 - *(dense)* Cache every non-HDF5 dataset as parquet
-- *(dense)* Separate cache for higgs-highlevel, derived from the higgs cache
-- *(cli)* aida-data export, path, list, prune-hdf5 and snippet; HDF5 export of every dataset
+- *(dense)* Derived cache for higgs-highlevel
+- Convert parquet caches to HDF5
+- Export library module
+- *(cli)* Aida-data export, path, list and prune-hdf5
+- *(cli)* Aida-data snippet prints a C++ (H5Easy) loader
+
+### 📚 Documentation
+
+- Document the command line and mark the export plan as implemented
+
+### 🚜 Refactor
+
+- *(dense)* Pure parsers and _ensure_cache
+- *(graph, timeseries)* Split _cached into _ensure_cache and a read
+
+### 🧪 Testing
+
+- Network tests for aida-data export
 ## [0.3.0] - 2026-11-17
 
 ### 🚀 Features
