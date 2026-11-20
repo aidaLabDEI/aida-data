@@ -91,6 +91,13 @@ def _prune_hdf5(args) -> int:
     return 0
 
 
+def _snippet(args) -> int:
+    from . import _snippets, export
+
+    print(_snippets.cpp_snippet(export.resolve(args.name), args.file), end="")
+    return 0
+
+
 # --------------------------------------------------------------------------
 # Parser
 # --------------------------------------------------------------------------
@@ -146,12 +153,23 @@ def _add_prune_hdf5(sub, common) -> None:
     p.set_defaults(func=_prune_hdf5)
 
 
+def _add_snippet(sub, common) -> None:
+    p = sub.add_parser(
+        "snippet", parents=[common], help="print C++ code that loads the HDF5 export"
+    )
+    p.add_argument("name", metavar="NAME")
+    p.add_argument(
+        "--file", metavar="PATH", help="path of the file in the code (default: NAME.hdf5)"
+    )
+    p.set_defaults(func=_snippet)
+
+
 def _add_format(parser) -> None:
     parser.add_argument("--format", choices=("hdf5", "parquet"), default="hdf5")
 
 
 # One function per subcommand; add new ones here.
-_SUBCOMMANDS = (_add_export, _add_path, _add_list, _add_prune_hdf5)
+_SUBCOMMANDS = (_add_export, _add_path, _add_list, _add_prune_hdf5, _add_snippet)
 
 
 def build_parser() -> argparse.ArgumentParser:

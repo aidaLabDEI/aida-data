@@ -45,5 +45,8 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-markers = ["network: tests that download datasets (deselected by default, run with `-m network`)"]
-addopts = "-m 'not network'"
+markers = [
+    "network: tests that download datasets (deselected by default, run with `-m network`)",
+    "cpp: tests that compile C++ snippets (deselected by default, run with `-m cpp`)",
+]
+addopts = "-m 'not network and not cpp'"

@@ -70,7 +70,8 @@ class Hdf5Object:
     element type the C++ snippet loads it as: integers all load as
     `int64_t` (HDF5 converts on read), so the snippet does not depend on the
     narrow dtype the cache picked. Optional objects are not in every file of
-    the layout.
+    the layout. `rank` is the number of dimensions of a dataset (1: vector,
+    2: matrix) or of an attribute (0: scalar, 1: array of values).
     """
 
     layout: str
@@ -78,6 +79,7 @@ class Hdf5Object:
     ctype: str
     required: bool = True
     attribute: bool = False
+    rank: int = 0
 
 
 def _root_attributes(layout: str) -> tuple[Hdf5Object, ...]:
@@ -94,39 +96,39 @@ def _root_attributes(layout: str) -> tuple[Hdf5Object, ...]:
 
 LAYOUT: tuple[Hdf5Object, ...] = (
     # ann-benchmarks / VIBE files, as downloaded.
-    Hdf5Object("native", "train", "float"),
-    Hdf5Object("native", "test", "float"),
-    Hdf5Object("native", "neighbors", "int64_t"),
-    Hdf5Object("native", "distances", "float"),
+    Hdf5Object("native", "train", "float", rank=2),
+    Hdf5Object("native", "test", "float", rank=2),
+    Hdf5Object("native", "neighbors", "int64_t", rank=2),
+    Hdf5Object("native", "distances", "float", rank=2),
     Hdf5Object("native", "distance", "std::string", attribute=True),
     # dense: `test`, `test_ids` and `qrels/*` are MTEB retrieval only, `ids`
     # MTEB retrieval, `colors` and the `color_*` attributes colored datasets.
     *_root_attributes("dense"),
-    Hdf5Object("dense", "train", "float"),
-    Hdf5Object("dense", "test", "float", required=False),
-    Hdf5Object("dense", "colors", "int64_t", required=False),
-    Hdf5Object("dense", "ids", "std::string", required=False),
-    Hdf5Object("dense", "test_ids", "std::string", required=False),
-    Hdf5Object("dense", "qrels/query", "std::string", required=False),
-    Hdf5Object("dense", "qrels/doc", "std::string", required=False),
-    Hdf5Object("dense", "qrels/score", "int64_t", required=False),
+    Hdf5Object("dense", "train", "float", rank=2),
+    Hdf5Object("dense", "test", "float", required=False, rank=2),
+    Hdf5Object("dense", "colors", "int64_t", required=False, rank=2),
+    Hdf5Object("dense", "ids", "std::string", required=False, rank=1),
+    Hdf5Object("dense", "test_ids", "std::string", required=False, rank=1),
+    Hdf5Object("dense", "qrels/query", "std::string", required=False, rank=1),
+    Hdf5Object("dense", "qrels/doc", "std::string", required=False, rank=1),
+    Hdf5Object("dense", "qrels/score", "int64_t", required=False, rank=1),
     Hdf5Object("dense", "distance", "std::string", attribute=True),
     Hdf5Object("dense", "dimension", "int64_t", attribute=True),
-    Hdf5Object("dense", "color_names", "std::string", False, attribute=True),
+    Hdf5Object("dense", "color_names", "std::string", False, attribute=True, rank=1),
     # JSON: a list of lists of labels, one per color.
     Hdf5Object("dense", "color_labels", "std::string", False, attribute=True),
     # graph (CSR)
     *_root_attributes("graph"),
-    Hdf5Object("graph", "offsets", "int64_t"),
-    Hdf5Object("graph", "neighbors", "int64_t"),
-    Hdf5Object("graph", "colors", "int64_t"),
+    Hdf5Object("graph", "offsets", "int64_t", rank=1),
+    Hdf5Object("graph", "neighbors", "int64_t", rank=1),
+    Hdf5Object("graph", "colors", "int64_t", rank=1),
     Hdf5Object("graph", "n_nodes", "int64_t", attribute=True),
     Hdf5Object("graph", "n_edges", "int64_t", attribute=True),
     # time series
     *_root_attributes("timeseries"),
-    Hdf5Object("timeseries", "values", "double"),
-    Hdf5Object("timeseries", "time", "int64_t", required=False),
-    Hdf5Object("timeseries", "dim_names", "std::string", False, attribute=True),
+    Hdf5Object("timeseries", "values", "double", rank=2),
+    Hdf5Object("timeseries", "time", "int64_t", required=False, rank=1),
+    Hdf5Object("timeseries", "dim_names", "std::string", False, attribute=True, rank=1),
     Hdf5Object("timeseries", "sampling", "std::string", False, attribute=True),
     Hdf5Object("timeseries", "source", "std::string", False, attribute=True),
 )
