@@ -288,7 +288,7 @@ def test_phones(tmp_path):
     assert _decode(colors, "Device") == ["nexus4_1", "s3_1"]
 
 
-def test_higgs_and_highlevel_share_the_cache(tmp_path):
+def test_higgs_parser_and_highlevel_derive(tmp_path):
     import gzip
 
     rows = [[1.0] + list(np.arange(28) / 10), [0.0] + list(-np.arange(28) / 10)]
@@ -299,12 +299,10 @@ def test_higgs_and_highlevel_share_the_cache(tmp_path):
     assert data.shape == (2, 28)
     np.testing.assert_allclose(data[0], np.arange(28) / 10, rtol=1e-6)
     assert _decode(colors, "label") == ["1", "0"]
-    mtime = (tmp_path / "higgs.parquet").stat().st_mtime_ns
     high, colors_high = dense._last_7_columns(*dense._cached(path, dense._HIGGS_CACHE, dense._parse_higgs))
     np.testing.assert_array_equal(high, data[:, -7:])
     assert high.flags["C_CONTIGUOUS"]
     np.testing.assert_array_equal(colors_high.values, colors.values)
-    assert (tmp_path / "higgs.parquet").stat().st_mtime_ns == mtime
 
 
 @pytest.mark.network

@@ -744,7 +744,7 @@ def _last_7_columns(
     data: np.ndarray, colors: Colors | None
 ) -> tuple[np.ndarray, Colors | None]:
     """The 7 high level features of HIGGS (its last 7 columns), as used by
-    streaming-fair and MACACO (see `DatasetInfo.postprocess`)."""
+    streaming-fair and MACACO (see `DatasetInfo.derive`)."""
     return np.ascontiguousarray(data[:, -7:]), colors
 
 
@@ -761,9 +761,13 @@ class DatasetInfo:
     # `(data, colors | None)`; for the HDF5 ones it returns
     # `(train, test, distances)`.
     cache_name: str | None = None
-    # Applied to `(data, colors)` after reading the cache. Only for
-    # `higgs-highlevel`, which shares the cache of `higgs`.
-    postprocess: Callable | None = None
+    # A dataset derived from the cache of another one (only
+    # `higgs-highlevel` from `higgs`): `derive(data, colors)` is applied to
+    # the contents of the parent's cache and the result is written to this
+    # dataset's own cache. Such a dataset never touches a raw file, so its
+    # `url` is only documentation and `loader_function` is not called.
+    derived_from: str | None = None
+    derive: Callable | None = None
 
 
 _DATASETS_INFO: dict[str, DatasetInfo] = {}
@@ -1208,8 +1212,9 @@ register(
         "https://archive.ics.uci.edu/ml/machine-learning-databases/00280/HIGGS.csv.gz",
         _parse_higgs,
         "euclidean",
-        _HIGGS_CACHE,
-        postprocess=_last_7_columns,
+        "higgs-highlevel",
+        derived_from="higgs",
+        derive=_last_7_columns,
     )
 )
 
@@ -1299,7 +1304,8 @@ def local_path(name: str):
 def _ensure_cache(name: str) -> Path:
     """Make sure dataset `name` is available locally and return the file to
     read: the raw download for datasets with no `cache_name` (the HDF5
-    ones), else the parquet cache, made if missing.
+    ones), else the parquet cache, made if missing. A derived dataset's
+    cache is made from its parent's, never from a raw file.
 
     Making the cache downloads the raw file if needed, parses it with the
     loader, writes the cache and deletes the raw file (see `_write_cache`).
@@ -1308,6 +1314,15 @@ def _ensure_cache(name: str) -> Path:
     """
     info = _DATASETS_INFO[name]
     _dense_dir().mkdir(parents=True, exist_ok=True)
+    if info.derive is not None:
+        # Built from the parent's cache, never from the raw file: the
+        # parent is made first if needed (which may download and parse).
+        cache = _dense_dir() / f"{info.cache_name}.parquet"
+        if not cache.is_file():
+            _LOGGER.info("deriving %s from %s", cache, info.derived_from)
+            data, colors = _read_parquet_cache(_ensure_cache(info.derived_from))
+            _write_parquet_cache(cache, *info.derive(data, colors))
+        return cache
     raw = local_path(name)
     if info.cache_name is None:
         _download(info.url, raw)
@@ -1322,20 +1337,27 @@ def _ensure_cache(name: str) -> Path:
 def _cache_exists(name: str) -> bool:
     """Whether dataset `name` is cached (parquet, or legacy HDF5 that
     `_ensure_cache` will convert), so that its raw file is not needed."""
-    cache_name = _DATASETS_INFO[name].cache_name
-    if cache_name is None:
+    info = _DATASETS_INFO[name]
+    if info.cache_name is None:
         return False
+    if info.derived_from is not None and _cache_exists(info.derived_from):
+        # Derived from the parent's cache, no download needed.
+        return True
     return any(
-        (_dense_dir() / f"{cache_name}{suffix}").is_file()
+        (_dense_dir() / f"{info.cache_name}{suffix}").is_file()
         for suffix in (".parquet", ".hdf5")
     )
 
 
 def _raw_is_shared(path: Path, cache_name: str | None) -> bool:
     """Whether a registered dataset with a cache other than `cache_name`, or
-    with no cache, downloads to the same file name as `path`."""
+    with no cache, downloads to the same file name as `path`. Derived
+    datasets do not count: they are built from another cache, not from the
+    raw file."""
     return any(
-        _raw_name(info) == path.name and info.cache_name != cache_name
+        _raw_name(info) == path.name
+        and info.cache_name != cache_name
+        and info.derive is None
         for info in _DATASETS_INFO.values()
     )
 
@@ -1352,6 +1374,7 @@ def prune_raw(dry_run: bool = True) -> list[Path]:
         path = local_path(name)
         if (
             info.cache_name is not None
+            and info.derive is None
             and _cache_exists(name)
             and path.is_file()
             and path not in paths
@@ -1489,8 +1512,6 @@ def load(
     colors: Colors | None
     if info.cache_name is not None:
         train, colors = _read_parquet_cache(path)
-        if info.postprocess is not None:
-            train, colors = info.postprocess(train, colors)
         test = distances = None
     else:
         train, test, distances, *rest = info.loader_function(path)

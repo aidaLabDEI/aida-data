@@ -4,6 +4,7 @@
 
 - *(dense)* Add a couple of hosted datasets
 - *(dense)* Cache every non-HDF5 dataset as parquet
+- *(dense)* Separate cache for higgs-highlevel, derived from the higgs cache
 ## [0.3.0] - 2026-11-17
 
 ### 🚀 Features

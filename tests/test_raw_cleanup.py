@@ -109,7 +109,6 @@ _REAL_CACHED = [
     "census1990",
     "phones",
     "higgs",
-    "higgs-highlevel",
 ]
 
 
@@ -124,8 +123,7 @@ def test_registered_cache_names_match_loaders(dense_dir, monkeypatch, name):
     cache_name = dense._DATASETS_INFO[name].cache_name
     dense._write_parquet_cache(dense_dir / f"{cache_name}.parquet", data, colors)
     ds = load(name)
-    expected = data[:, -7:] if name == "higgs-highlevel" else data
-    np.testing.assert_array_equal(ds.dataset, expected)
+    np.testing.assert_array_equal(ds.dataset, data)
 
 
 def test_prune_raw(dense_dir, monkeypatch):
@@ -183,3 +181,30 @@ def test_athlete_cached_on_first_load(dense_dir, monkeypatch):
     np.testing.assert_array_equal(first.colors.values, second.colors.values)
     assert first.colors.labels == second.colors.labels
     assert first.dataset.shape == (2, 3)
+
+
+def _write_fake_higgs(dense_dir):
+    data = np.arange(56, dtype=np.float32).reshape(2, 28)
+    colors = Colors(np.array([[1], [0]]), ("label",), (("0", "1"),))
+    dense._write_parquet_cache(dense_dir / "higgs.parquet", data, colors)
+    return data, colors
+
+
+def test_highlevel_derived_from_higgs_cache(dense_dir, fake_datasets):
+    data, colors = _write_fake_higgs(dense_dir)
+    ds = load("higgs-highlevel", deduplicate=False)
+    assert fake_datasets == []  # nothing downloaded
+    assert ds.dataset.shape == (2, 7)
+    np.testing.assert_array_equal(ds.dataset, data[:, -7:])
+    np.testing.assert_array_equal(ds.colors.values, colors.values)
+    assert ds.colors.names == colors.names
+    assert (dense_dir / "higgs-highlevel.parquet").is_file()
+    assert not (dense_dir / "HIGGS.csv.gz").exists()
+
+
+def test_raw_higgs_unused_by_highlevel(dense_dir):
+    _write_fake_higgs(dense_dir)
+    raw = dense_dir / "HIGGS.csv.gz"
+    raw.write_text("raw")
+    # higgs-highlevel does not count as another user of the raw file
+    assert dense.prune_raw() == [raw]
