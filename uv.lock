@@ -12,10 +12,11 @@ resolution-markers = [
 
 [[package]]
 name = "aida-data"
-version = "0.4.0"
+version = "0.4.1"
 source = { editable = "." }
 dependencies = [
     { name = "h5py" },
+    { name = "huggingface-hub" },
     { name = "numpy" },
     { name = "pandas" },
     { name = "pyarrow" },
@@ -47,6 +48,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "h5py", specifier = ">=3.16.0" },
+    { name = "huggingface-hub", specifier = ">=2.4.0" },
     { name = "mteb", marker = "extra == 'mteb'", specifier = ">=2.27.14,<3" },
     { name = "numpy", specifier = ">=2.5.3" },
     { name = "pandas", specifier = ">=3.0.6" },

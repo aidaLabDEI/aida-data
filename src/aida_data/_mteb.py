@@ -15,6 +15,7 @@ names, building rows, colors and qrels, writing the files) do not need them.
 """
 
 import logging
+import shutil
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +24,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import pyarrow as pa
+from huggingface_hub import hf_hub_download
 
 from . import _download, dense
 from ._cache import write_table
@@ -90,18 +92,33 @@ def fetch_hosted(task: str, model: str, dest: Path) -> bool:
     another `HEAD`: if it exists, `queries.parquet` and `qrels.parquet` are
     downloaded first, then `corpus.parquet`; otherwise (clustering) only
     `corpus.parquet`. Probing, rather than downloading the corpus first and
-    reading its `task_type`, keeps `corpus.parquet` the last file to appear,
-    straight from `_download.download`, which already writes atomically. An
-    interrupted download leaves no `corpus.parquet`, so the next call starts
-    again (files already complete are skipped by `download`).
+    reading its `task_type`, keeps `corpus.parquet` the last file to appear.
+
+    Files are downloaded with `huggingface_hub.hf_hub_download` into a
+    staging directory `dest/.hf`, then renamed into `dest`, so each file is
+    either complete or missing. An interrupted download leaves no
+    `corpus.parquet`, so the next call starts again (files already in `dest`
+    are skipped).
     """
     if not _exists_hosted(_hosted_url(task, model, CORPUS_FILE)):
         return False
     is_retrieval = _exists_hosted(_hosted_url(task, model, QRELS_FILE))
     dest.mkdir(parents=True, exist_ok=True)
     files = [QUERIES_FILE, QRELS_FILE] if is_retrieval else []
-    for filename in [*files, CORPUS_FILE]:
-        _download.download(_hosted_url(task, model, filename), dest / filename)
+    staging = dest / ".hf"
+    try:
+        for filename in [*files, CORPUS_FILE]:
+            if (dest / filename).exists():
+                continue
+            path = hf_hub_download(
+                repo_id=_MTEB_HF_REPO,
+                repo_type="dataset",
+                filename=f"{task}/{model_slug(model)}/{filename}",
+                local_dir=staging,
+            )
+            Path(path).replace(dest / filename)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
     return True
 
 

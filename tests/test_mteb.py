@@ -2,6 +2,7 @@
 
 import os
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -382,11 +383,15 @@ def _fake_head(monkeypatch, statuses):
 def _fake_download(monkeypatch):
     downloaded = []
 
-    def download(url, destination):
-        downloaded.append((url, destination.name))
-        destination.write_text("x")
+    def download(*, repo_id, repo_type, filename, local_dir):
+        assert repo_id == _mteb._MTEB_HF_REPO and repo_type == "dataset"
+        path = Path(local_dir) / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x")
+        downloaded.append((filename, path.name))
+        return str(path)
 
-    monkeypatch.setattr(_mteb._download, "download", download)
+    monkeypatch.setattr(_mteb, "hf_hub_download", download)
     return downloaded
 
 
@@ -419,8 +424,10 @@ def test_fetch_hosted_retrieval(tmp_path, monkeypatch):
     assert [name for _, name in downloaded] == [
         "queries.parquet", "qrels.parquet", "corpus.parquet",
     ]
-    assert downloaded[-1][0].endswith("/T/a__b/corpus.parquet")
-    assert downloaded[-1][0].startswith(_mteb._MTEB_HF_BASE)
+    assert downloaded[-1][0] == "T/a__b/corpus.parquet"
+    assert sorted(p.name for p in (tmp_path / "d").iterdir()) == [
+        "corpus.parquet", "qrels.parquet", "queries.parquet",
+    ]
 
 
 def test_fetch_hosted_clustering(tmp_path, monkeypatch):
@@ -792,3 +799,12 @@ def test_network_drift_against_mteb_dataloader():
     np.testing.assert_allclose(
         ours(qrows, PromptType.query), theirs(queries, PromptType.query), atol=1e-4
     )
+
+
+def test_fetch_hosted_skips_complete_files(tmp_path, monkeypatch):
+    _fake_head(monkeypatch, {"corpus.parquet": 200, "qrels.parquet": 200})
+    downloaded = _fake_download(monkeypatch)
+    (tmp_path / "queries.parquet").write_text("done")
+    assert _mteb.fetch_hosted("T", "a/b", tmp_path) is True
+    assert [name for _, name in downloaded] == ["qrels.parquet", "corpus.parquet"]
+    assert not (tmp_path / ".hf").exists()
